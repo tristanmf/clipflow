@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🎬</text></svg>'>
+<title>ClipFlow — l'appli Mac que j'ai décrite à une IA</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --paper:#F5F4FB; --ground:#ECEAF6; --ink:#171520; --muted:#6A6579;
+    --line:#E2DEEF; --card:#FFFFFF; --violet:#6D4AFF; --violet-2:#8B6DFF;
+    --violet-soft:#ECE7FF; --mint:#0F9E74; --blue:#3B7BF6; --halo:#0b0a12;
+    --shadow:0 1px 2px rgba(23,21,32,.06),0 12px 30px -12px rgba(60,40,140,.22);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#0E0C14; --ground:#141220; --ink:#EEECF6; --muted:#9A94A9;
+      --line:#282539; --card:#1A1826; --violet:#8B6DFF; --violet-2:#A78BFF;
+      --violet-soft:#221C3C; --mint:#34D3A0; --blue:#6BA1FF; --halo:#000;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 18px 40px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#F5F4FB; --ground:#ECEAF6; --ink:#171520; --muted:#6A6579;
+    --line:#E2DEEF; --card:#FFFFFF; --violet:#6D4AFF; --violet-2:#8B6DFF;
+    --violet-soft:#ECE7FF; --mint:#0F9E74; --blue:#3B7BF6; --halo:#0b0a12;
+    --shadow:0 1px 2px rgba(23,21,32,.06),0 12px 30px -12px rgba(60,40,140,.22);
+  }
+  :root[data-theme="dark"]{
+    --paper:#0E0C14; --ground:#141220; --ink:#EEECF6; --muted:#9A94A9;
+    --line:#282539; --card:#1A1826; --violet:#8B6DFF; --violet-2:#A78BFF;
+    --violet-soft:#221C3C; --mint:#34D3A0; --blue:#6BA1FF; --halo:#000;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 18px 40px -14px rgba(0,0,0,.6);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+    line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1000px;margin:0 auto;padding:0 24px}
+  .mono{font-family:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
+
+  /* timecode eyebrow */
+  .tc{
+    display:inline-flex;align-items:center;gap:.5em;
+    font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px;letter-spacing:.06em;
+    color:var(--violet);background:var(--violet-soft);
+    padding:.3em .7em;border-radius:6px;font-weight:600;
+  }
+  .tc::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--violet)}
+
+  h1,h2,h3{text-wrap:balance;letter-spacing:-.02em;line-height:1.08;margin:0}
+  h1{font-size:clamp(38px,7vw,68px);font-weight:800}
+  h2{font-size:clamp(26px,4vw,38px);font-weight:800;letter-spacing:-.025em}
+  h3{font-size:19px;font-weight:700;letter-spacing:-.01em}
+  p{margin:0}
+  .lead{font-size:clamp(18px,2.2vw,21px);color:var(--muted);max-width:60ch}
+
+  /* ---- top bar ---- */
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:22px 0;gap:16px}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:700;letter-spacing:-.02em}
+  .glyph{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;
+    background:linear-gradient(150deg,var(--violet),var(--blue));color:#fff;box-shadow:var(--shadow)}
+  .glyph svg{width:17px;height:17px}
+  .tag{font-size:12.5px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:4px 11px}
+
+  /* ---- hero ---- */
+  .hero{padding:46px 0 20px}
+  .hero .tc{margin-bottom:20px}
+  .hero h1 span{color:var(--violet)}
+  .hero .lead{margin-top:20px}
+  .made{margin-top:22px;display:inline-flex;gap:9px;align-items:center;font-size:14px;color:var(--muted);
+    border:1px dashed var(--line);border-radius:10px;padding:8px 13px}
+  .made b{color:var(--ink);font-weight:650}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--mint);box-shadow:0 0 0 4px color-mix(in srgb,var(--mint) 22%,transparent)}
+
+  /* ---- app window mock ---- */
+  .window{
+    margin:40px 0 8px;background:var(--card);border:1px solid var(--line);
+    border-radius:16px;box-shadow:var(--shadow);overflow:hidden
+  }
+  .titlebar{display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid var(--line);
+    background:color-mix(in srgb,var(--ground) 60%,var(--card))}
+  .light{width:12px;height:12px;border-radius:50%}
+  .l1{background:#FF5F57}.l2{background:#FEBC2E}.l3{background:#28C840}
+  .titlebar .name{margin-left:8px;font-size:13px;font-weight:650;color:var(--muted)}
+  .app{padding:22px;display:grid;gap:18px}
+  .seg{display:flex;background:var(--ground);border-radius:11px;padding:4px;gap:4px;max-width:420px;margin:0 auto;width:100%}
+  .seg button{flex:1;border:0;background:transparent;color:var(--muted);font:inherit;font-size:14px;font-weight:600;
+    padding:8px 6px;border-radius:8px;cursor:default}
+  .seg button[aria-current="true"]{background:var(--violet);color:#fff;box-shadow:0 1px 6px rgba(80,50,200,.35)}
+  .drop{border:1.5px dashed color-mix(in srgb,var(--violet) 45%,var(--line));border-radius:13px;
+    padding:30px 20px;text-align:center;background:color-mix(in srgb,var(--violet-soft) 45%,transparent)}
+  .drop .film{width:46px;height:46px;margin:0 auto 12px;color:var(--violet);opacity:.9}
+  .drop b{display:block;font-size:16px}
+  .drop small{color:var(--muted)}
+  .linkrow{display:flex;gap:9px;align-items:center;max-width:520px;margin:0 auto;width:100%}
+  .linkrow .field{flex:1;display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:9px;
+    padding:9px 12px;color:var(--muted);font-size:14px;background:var(--paper)}
+  .linkrow .go{background:var(--violet);color:#fff;border-radius:9px;padding:9px 15px;font-size:14px;font-weight:650}
+  .progress{max-width:520px;margin:2px auto 0;width:100%}
+  .progress .lbl{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-bottom:6px}
+  .bar{height:7px;border-radius:6px;background:var(--ground);overflow:hidden}
+  .bar i{display:block;height:100%;width:64%;border-radius:6px;background:linear-gradient(90deg,var(--violet),var(--violet-2));
+    animation:fill 2.6s ease-out both}
+  @keyframes fill{from{width:0}to{width:64%}}
+
+  /* ---- caption band (real subtitle style) ---- */
+  .band{margin:56px 0;border-radius:16px;overflow:hidden;position:relative;
+    background:
+      radial-gradient(120% 90% at 20% 0%,#2b2350 0%,transparent 55%),
+      radial-gradient(120% 120% at 90% 100%,#123a4d 0%,transparent 50%),
+      linear-gradient(160deg,#1a1730,#0c1622);
+    border:1px solid var(--line)}
+  .frame{aspect-ratio:16/7;min-height:230px;display:flex;flex-direction:column;justify-content:flex-end;
+    padding:26px;position:relative}
+  .filmedge{position:absolute;top:0;bottom:0;width:26px;background-image:radial-gradient(circle,rgba(255,255,255,.13) 2.2px,transparent 2.4px);
+    background-size:26px 22px;background-position:center}
+  .filmedge.l{left:0}.filmedge.r{right:0}
+  .cap{align-self:center;text-align:center;max-width:80%}
+  .cap .src{font-size:13px;color:#9fb2c9;font-family:ui-monospace,Menlo,monospace;margin-bottom:12px;opacity:.9}
+  .cap .fr{
+    font-family:Helvetica,-apple-system,sans-serif;font-weight:600;color:#fff;
+    font-size:clamp(20px,3.4vw,30px);line-height:1.25;
+    text-shadow:0 0 6px var(--halo),0 0 6px var(--halo),0 2px 5px var(--halo),0 0 14px rgba(8,8,18,.7);
+  }
+  .band .cue{position:absolute;top:14px;left:26px;right:26px;display:flex;justify-content:space-between;
+    font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:rgba(255,255,255,.5)}
+  .playhead{position:absolute;top:0;bottom:0;width:2px;background:linear-gradient(var(--violet-2),transparent);
+    left:32%;animation:sweep 5s linear infinite}
+  @keyframes sweep{0%{left:6%}100%{left:94%}}
+
+  /* ---- section ---- */
+  section{padding:52px 0}
+  .shead{max-width:64ch;margin-bottom:30px;display:grid;gap:14px}
+  .shead p{color:var(--muted);font-size:17px}
+
+  /* ---- capability grid ---- */
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+  .feat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;display:grid;gap:10px;
+    box-shadow:var(--shadow)}
+  .feat .ic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:var(--violet-soft);color:var(--violet)}
+  .feat .ic svg{width:20px;height:20px}
+  .feat h3{margin-top:4px}
+  .feat p{color:var(--muted);font-size:14.5px}
+  .feat .kv{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--violet);
+    background:var(--violet-soft);border-radius:6px;padding:3px 8px;justify-self:start;margin-top:2px}
+
+  /* ---- search highlight ---- */
+  .search{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px;box-shadow:var(--shadow);
+    display:grid;gap:18px}
+  .qbar{display:flex;gap:10px;align-items:center;border:1.5px solid color-mix(in srgb,var(--violet) 40%,var(--line));
+    border-radius:11px;padding:12px 15px;background:var(--paper)}
+  .qbar svg{width:18px;height:18px;color:var(--violet);flex:none}
+  .qbar .q{font-size:16px}
+  .qbar .q b{color:var(--violet);font-weight:700}
+  .caret{width:2px;height:20px;background:var(--violet);animation:blink 1.1s step-end infinite}
+  @keyframes blink{50%{opacity:0}}
+  .result{display:flex;gap:14px;align-items:center;border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+    background:color-mix(in srgb,var(--violet-soft) 30%,transparent)}
+  .result .thumb{width:74px;height:48px;border-radius:8px;flex:none;position:relative;overflow:hidden;
+    background:linear-gradient(135deg,#2b2350,#123a4d)}
+  .result .thumb::after{content:"▶";position:absolute;inset:0;display:grid;place-items:center;color:#fff;font-size:15px;opacity:.9}
+  .result .meta{display:grid;gap:3px}
+  .result .meta .t{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--violet);font-weight:600}
+  .result .meta .d{font-size:14.5px}
+  .result .cut{margin-left:auto;font-size:13px;font-weight:650;color:#fff;background:var(--violet);border-radius:8px;padding:8px 13px;flex:none}
+
+  /* ---- open source ---- */
+  code{font-family:ui-monospace,Menlo,monospace;font-size:.88em;background:var(--violet-soft);color:var(--violet);padding:.12em .42em;border-radius:5px}
+  .term{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13.5px;line-height:2;
+    background:#141124;color:#e9e7f4;border:1px solid #2a2540;border-radius:11px;padding:15px 18px;
+    overflow-x:auto;white-space:nowrap}
+  .term .prompt{color:var(--violet-2);user-select:none;margin-right:9px}
+  .repo{display:inline-flex;align-items:center;gap:9px;justify-self:start;text-decoration:none;
+    background:var(--violet);color:#fff;font-weight:650;font-size:15px;padding:11px 18px;border-radius:11px}
+  .repo svg{width:19px;height:19px}
+  .repo:hover{filter:brightness(1.06)}
+  .repo:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+
+  /* ---- how it's made ---- */
+  .made-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:8px}
+  .note{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;padding:16px 18px}
+  .note .chk{color:var(--mint);flex:none;margin-top:2px}
+  .note b{font-weight:680}
+  .note span{color:var(--muted);font-size:14.5px}
+
+  /* ---- closing ---- */
+  .close{text-align:center;padding:64px 0 40px}
+  .close h2{max-width:18ch;margin:0 auto 16px}
+  .close .lead{margin:0 auto}
+  .close .k{color:var(--violet);font-weight:700}
+
+  footer{border-top:1px solid var(--line);padding:26px 0 60px;color:var(--muted);font-size:13.5px;
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  footer .mono{font-size:12.5px}
+
+  @media (max-width:720px){
+    .grid,.made-grid{grid-template-columns:1fr}
+    .result{flex-wrap:wrap}
+    .result .cut{margin-left:0}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .bar i,.playhead,.caret{animation:none}
+    .bar i{width:64%}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <span class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+      </span>
+      ClipFlow
+    </div>
+    <span class="tag">Application macOS native · usage perso</span>
+  </div>
+
+  <!-- HERO -->
+  <header class="hero">
+    <span class="tc mono">00:00 — le pitch</span>
+    <h1>J'ai fabriqué <span>mon propre outil vidéo</span>.</h1>
+    <p class="lead">Sous-titrer, traduire, découper et compresser mes vidéos — une vraie appli Mac, qui tourne en local sur ma machine. Pas un site, pas un abonnement.</p>
+    <div class="made"><span class="dot" aria-hidden="true"></span> Et le plus fou : <b>je ne l'ai pas codée. Je l'ai décrite à une IA</b>, qui l'a écrite.</div>
+
+    <!-- app window -->
+    <div class="window" role="img" aria-label="Fenêtre de l'application ClipFlow : trois onglets Sous-titrer, Extraire, Compresser, une zone de dépôt de vidéo et un champ pour coller un lien.">
+      <div class="titlebar">
+        <span class="light l1"></span><span class="light l2"></span><span class="light l3"></span>
+        <span class="name">ClipFlow</span>
+      </div>
+      <div class="app">
+        <div class="seg" aria-hidden="true">
+          <button aria-current="true">Sous-titrer</button>
+          <button>Extraire</button>
+          <button>Compresser</button>
+        </div>
+        <div class="drop">
+          <svg class="film" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>
+          <b>Dépose une vidéo</b>
+          <small>ou clique pour choisir un fichier</small>
+        </div>
+        <div class="linkrow" aria-hidden="true">
+          <span class="field">🔗&nbsp; ou colle un lien (YouTube, X, Fox…)</span>
+          <span class="go">Télécharger</span>
+        </div>
+        <div class="progress" aria-hidden="true">
+          <div class="lbl"><span>Transcription locale (Whisper)…</span><span class="mono">64 %</span></div>
+          <div class="bar"><i></i></div>
+        </div>
+      </div>
+    </div>
+    <p class="lead mono" style="font-size:13px;margin-top:14px">Maquette de l'interface réelle.</p>
+  </header>
+
+  <!-- CAPTION BAND -->
+  <div class="band" role="img" aria-label="Image de vidéo avec un sous-titre gravé : la phrase anglaise est transcrite puis traduite en français, incrustée en bas de l'image.">
+    <span class="filmedge l" aria-hidden="true"></span><span class="filmedge r" aria-hidden="true"></span>
+    <div class="frame">
+      <div class="cue mono" aria-hidden="true"><span>00:12:41 → 00:12:45</span><span>● FR</span></div>
+      <div class="playhead" aria-hidden="true"></div>
+      <div class="cap">
+        <div class="src">“…and that's exactly how the narrative spreads.”</div>
+        <div class="fr">« …et c'est exactement comme ça que le récit se propage. »</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CAPABILITIES -->
+  <section>
+    <div class="shead">
+      <span class="tc mono">00:15 — ce qu'elle fait</span>
+      <h2>Quatre gestes, une seule fenêtre.</h2>
+      <p>Chaque outil reprend exactement le pipeline que j'utilisais en ligne de commande — mais en cliquable, avec une vraie barre de progression.</p>
+    </div>
+
+    <div class="grid">
+      <article class="feat">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15h4M14 15h3M7 11h10"/></svg></span>
+        <h3>Sous-titrer &amp; traduire</h3>
+        <p>La vidéo est transcrite <b>en local</b> (modèle Whisper large, rien ne part dans le cloud), traduite en français par Claude, puis les sous-titres sont <b>gravés dans l'image</b> — prêts pour les réseaux.</p>
+        <span class="kv">local · anglais → français</span>
+      </article>
+
+      <article class="feat">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><path d="M20 4 8.7 15.3M13.5 14 20 20M8 8l3.5 3.5"/></svg></span>
+        <h3>Extraire un passage</h3>
+        <p>Je décris le moment que je cherche <b>en langage naturel</b>, ou je pioche dans un sommaire thématique généré par l'IA. Coupe nette <b>au timecode exact</b>, sous-titres en option.</p>
+        <span class="kv">recherche par le sens</span>
+      </article>
+
+      <article class="feat">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 4H5v4M15 4h4v4M9 20H5v-4M15 20h4v-4M8 12h8"/></svg></span>
+        <h3>Compresser</h3>
+        <p>Réencodage H.264 à qualité constante : les captures très lourdes fondent de plusieurs fois <b>sans perte visible</b>. Trois niveaux, un clic.</p>
+        <span class="kv">jusqu'à ~10× plus léger</span>
+      </article>
+
+      <article class="feat">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M8 11l4 4 4-4M5 21h14"/></svg></span>
+        <h3>Coller un lien</h3>
+        <p>Je colle une URL — YouTube, X, à peu près n'importe quel site — la vidéo se télécharge, et j'enchaîne directement sur l'un des trois outils.</p>
+        <span class="kv">tous sites (yt-dlp)</span>
+      </article>
+    </div>
+  </section>
+
+  <!-- SEARCH HIGHLIGHT -->
+  <section>
+    <div class="shead">
+      <span class="tc mono">00:32 — la fonction que je préfère</span>
+      <h2>« Trouve-moi le moment où… »</h2>
+      <p>Je n'ai plus à scruter une heure de vidéo. Je tape ce que je cherche, l'IA lit la transcription, repère le passage, me montre le texte — et je coupe pile au bon endroit.</p>
+    </div>
+
+    <div class="search">
+      <div class="qbar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <span class="q">le passage où il parle de <b>désinformation électorale</b></span>
+        <span class="caret" aria-hidden="true"></span>
+      </div>
+      <div class="result">
+        <span class="thumb" aria-hidden="true"></span>
+        <div class="meta">
+          <span class="t mono">08:14 → 09:02 · 48 s</span>
+          <span class="d">« Là, il explique comment les faux comptes amplifient un doute sur le dépouillement… »</span>
+        </div>
+        <span class="cut">Extraire</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT'S MADE -->
+  <section>
+    <div class="shead">
+      <span class="tc mono">00:48 — comment c'est fait</span>
+      <h2>Décrite, pas codée.</h2>
+      <p>Je ne suis pas développeur. J'ai expliqué à Claude Code ce que je voulais, dans mes mots — et il a écrit l'appli, corrigé les bugs, ajouté les fonctions au fil de mes retours.</p>
+    </div>
+
+    <div class="made-grid">
+      <div class="note"><span class="chk">✓</span><span><b>Vraie appli macOS native</b> (SwiftUI), pas une page web déguisée.</span></div>
+      <div class="note"><span class="chk">✓</span><span><b>Tout tourne en local</b> sur mon Mac — la transcription ne quitte pas la machine.</span></div>
+      <div class="note"><span class="chk">✓</span><span><b>Construite par itérations</b> : je teste, je dis ce qui cloche, l'IA corrige.</span></div>
+      <div class="note"><span class="chk">✓</span><span><b>Synchronisée entre mes deux Macs</b> via un dépôt de code privé.</span></div>
+      <div class="note"><span class="chk">✓</span><span><b>Taillée pour mon métier</b> : décrypter la désinformation, sous-titrer des captures en anglais.</span></div>
+      <div class="note"><span class="chk">✓</span><span><b>Zéro abonnement, zéro cloud tiers</b> : mes outils, ma machine, mes règles.</span></div>
+    </div>
+  </section>
+
+  <!-- OPEN SOURCE -->
+  <section>
+    <div class="shead">
+      <span class="tc mono">00:56 — à toi de jouer</span>
+      <h2>C'est open source. Fais le tien.</h2>
+      <p>Tout le code est public, sous licence MIT. Deux commandes pour l'installer sur un Mac Apple Silicon — et le <code>CLAUDE.md</code> raconte l'architecture et les pièges, si tu veux l'adapter ou repartir de zéro avec ton IA.</p>
+    </div>
+
+    <div class="search">
+      <div class="term" role="img" aria-label="Deux commandes de terminal pour installer ClipFlow.">
+        <span class="prompt">$</span> git clone https://github.com/tristanmf/clipflow.git
+        <br><span class="prompt">$</span> bash clipflow/install-sous-titrage.sh
+      </div>
+      <a class="repo" href="https://github.com/tristanmf/clipflow">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.09.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.63.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.55-1.14-4.55-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
+        Voir le code sur GitHub
+      </a>
+    </div>
+  </section>
+
+  <!-- CLOSING -->
+  <div class="close">
+    <span class="tc mono" style="margin-bottom:18px">01:00 — le vrai sujet</span>
+    <h2>Le plus cool, ce n'est pas l'appli.</h2>
+    <p class="lead">C'est qu'aujourd'hui, <span class="k">n'importe qui peut décrire l'outil dont il rêve</span> et le voir exister. J'avais un besoin précis. Je l'ai raconté. Il tourne maintenant sur mon bureau.</p>
+  </div>
+
+  <footer>
+    <span>ClipFlow — un outil de <b style="color:var(--ink)">Tristan Mendès France</b> · open source (MIT)</span>
+    <span class="mono">github.com/tristanmf/clipflow · décrit à une IA, exécuté en local</span>
+  </footer>
+
+</div>
+</body>
+</html>
