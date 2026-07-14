@@ -1,5 +1,12 @@
 # ClipFlow — sous-titrer, traduire, découper et compresser ses vidéos, en local sur Mac
 
+![macOS 14+](https://img.shields.io/badge/macOS-14+-111111?logo=apple&logoColor=white)
+![SwiftUI](https://img.shields.io/badge/SwiftUI-Swift-F05138?logo=swift&logoColor=white)
+![Transcription locale](https://img.shields.io/badge/transcription-100%25%20locale-2EA043)
+![Whisper + ffmpeg](https://img.shields.io/badge/Whisper%20%C2%B7%20ffmpeg%20%C2%B7%20yt--dlp-informational)
+![Construit avec Claude](https://img.shields.io/badge/construit%20avec-Claude-8A5CF6)
+![Licence MIT](https://img.shields.io/badge/licence-MIT-0A7BBB)
+
 > Une app macOS + des scripts pour **transcrire, traduire en français, incruster des sous-titres,
 > extraire un passage et compresser** des vidéos courtes — **entièrement en local** sur ton Mac.
 > Rien ne part dans un cloud tiers : la transcription tourne sur ta machine.
