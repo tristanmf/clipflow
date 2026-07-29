@@ -14,6 +14,10 @@ final class Moteur: @unchecked Sendable {
     static let suffixeAuto = "_FR"
 
     let executeur = Executeur()
+    /// Exécuteur dédié aux commandes du tunnel : séparé pour que la coupure du
+    /// tunnel fonctionne encore APRÈS une annulation (l'exécuteur principal est
+    /// alors marqué annulé et refuserait de lancer quoi que ce soit).
+    private let executeurTunnel = Executeur()
 
     /// Rappel de progression : (libellé de l'étape, fraction 0…1 ou nil = indéterminé)
     var progression: @Sendable (String, Double?) -> Void = { _, _ in }
@@ -435,7 +439,66 @@ final class Moteur: @unchecked Sendable {
     /// (remux sans réencodage quand possible). Retourne le fichier local, prêt à
     /// enchaîner sur l'une des trois actions. yt-dlp casse régulièrement quand un
     /// site change ses endpoints → le message d'erreur pointe vers sa mise à jour.
-    func telecharger(lien: String) async throws -> URL {
+    // ── Tunnel Cloudflare WARP (optionnel, le temps du téléchargement) ──
+
+    /// Le tunnel est-il actif ? (« Disconnected » contient « connected » → on
+    /// teste l'absence de « disconnected » d'abord.)
+    private func tunnelActif(_ warp: String) async -> Bool {
+        guard let r = try? await executeurTunnel.lancer(warp, ["status"]) else { return false }
+        let t = (r.sortie + r.erreurs).lowercased()
+        if t.contains("disconnected") || t.contains("connecting") { return false }
+        return t.contains("connected")
+    }
+
+    /// Lance une sous-commande warp-cli (avec repli si `--accept-tos` est inconnu
+    /// de la version installée).
+    private func warpCommande(_ warp: String, _ sousCommande: String) async {
+        let r = try? await executeurTunnel.lancer(warp, ["--accept-tos", sousCommande])
+        if r?.code != 0 { _ = try? await executeurTunnel.lancer(warp, [sousCommande]) }
+    }
+
+    /// Active le tunnel. Retourne true si c'est NOUS qui l'avons activé (donc à
+    /// couper après) ; false s'il était déjà actif — dans ce cas on n'y touche pas.
+    private func activerTunnel() async throws -> Bool {
+        guard let warp = Binaires.warp else {
+            throw ErreurTraitement.echec("Cloudflare WARP n'est pas installé. Terminal : brew install --cask cloudflare-warp")
+        }
+        if await tunnelActif(warp) { return false }
+        etape("Activation du tunnel Cloudflare…", nil)
+        await warpCommande(warp, "connect")
+        for _ in 0..<20 {                            // jusqu'à ~20 s
+            if await tunnelActif(warp) { return true }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        throw ErreurTraitement.echec("Le tunnel Cloudflare ne s'est pas activé. Ouvre l'app « Cloudflare WARP » une fois et active-la à la main (nécessaire au premier usage), puis réessaie.")
+    }
+
+    private func couperTunnel() async {
+        guard let warp = Binaires.warp else { return }
+        etape("Coupure du tunnel…", nil)
+        await warpCommande(warp, "disconnect")
+    }
+
+    /// `cookiesNavigateur` (ex. "chrome") = passe `--cookies-from-browser` à yt-dlp,
+    /// indispensable pour les vidéos X/Twitter qui exigent d'être connecté (même
+    /// publiques : X ne sert plus les flux vidéo en anonyme).
+    /// `tunnel` = active Cloudflare WARP le temps du téléchargement puis le recoupe
+    /// (utile là où l'opérateur ne route pas les plages IP de X — voir CLAUDE.md).
+    func telecharger(lien: String, cookiesNavigateur: String? = nil, tunnel: Bool = false) async throws -> URL {
+        var tunnelParNous = false
+        if tunnel { tunnelParNous = try await activerTunnel() }
+        do {
+            let fichier = try await telechargerSansTunnel(lien: lien, cookiesNavigateur: cookiesNavigateur)
+            if tunnelParNous { await couperTunnel() }
+            return fichier
+        } catch {
+            // Coupure garantie aussi en cas d'échec OU d'annulation.
+            if tunnelParNous { await couperTunnel() }
+            throw error
+        }
+    }
+
+    private func telechargerSansTunnel(lien: String, cookiesNavigateur: String?) async throws -> URL {
         let ytdlp = try binaire("yt-dlp", Binaires.ytdlp)
         let dossier = try Dossiers.preparer(Dossiers.sousTitrage)
         let identifiant = "clipflow_\(UUID().uuidString.prefix(8))"
@@ -452,9 +515,17 @@ final class Moteur: @unchecked Sendable {
             "--newline",                     // progression ligne par ligne (pas de \r)
             "-f", "bv*+ba/b",                // meilleure vidéo+audio, repli meilleur unique
             "--remux-video", "mp4",          // conteneur mp4 sans réencodage si possible
+            // Résilience aux coupures passagères (X/Twitter time out souvent) :
+            "--socket-timeout", "30",        // délai de connexion allongé (défaut 20 s)
+            "--retries", "5",                // relances du téléchargement
+            "--extractor-retries", "3",      // relances de la récupération des métadonnées (JSON)
+            "--retry-sleep", "3",            // petite pause entre les tentatives
             "-o", gabarit,
             lien
         ]
+        if let nav = cookiesNavigateur {
+            args.insert(contentsOf: ["--cookies-from-browser", nav], at: 0)
+        }
         // yt-dlp a besoin de ffmpeg (fusion vidéo+audio, remux) : on le localise
         // explicitement plutôt que de dépendre du PATH.
         if let ff = Binaires.ffmpeg {
@@ -467,7 +538,11 @@ final class Moteur: @unchecked Sendable {
             let out = r.sortie.trimmingCharacters(in: .whitespacesAndNewlines)
             let detail = (err.isEmpty ? out : err).suffix(400)
             let suffixe = detail.isEmpty ? "" : "\n\n\(detail)"
-            throw ErreurTraitement.echec("Téléchargement échoué. Si le site a changé, mets yt-dlp à jour : brew upgrade yt-dlp\(suffixe)")
+            // Indice utile si l'échec ressemble à une vidéo X protégée et qu'on n'a pas passé de cookies.
+            let indiceCookies = (cookiesNavigateur == nil && detail.lowercased().contains("no video"))
+                ? "\n\nAstuce : pour une vidéo X/Twitter, coche « Utiliser mes cookies » — X exige d'être connecté, même pour un tweet public."
+                : "\n\nSi le site a changé, mets yt-dlp à jour : brew upgrade yt-dlp"
+            throw ErreurTraitement.echec("Téléchargement échoué.\(indiceCookies)\(suffixe)")
         }
 
         // Retrouver le fichier produit (mp4 attendu ; sinon même préfixe, autre conteneur).

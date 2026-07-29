@@ -102,6 +102,22 @@ struct PanneauPreparation: View {
                 Button("Télécharger") { modele.telecharger() }
                     .disabled(modele.lienEntree.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            HStack(spacing: 6) {
+                Toggle("Utiliser mes cookies Chrome", isOn: $modele.utiliserCookies)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+                Text("— pour les vidéos X qui exigent d'être connecté")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }
+            HStack(spacing: 6) {
+                Toggle("Tunnel Cloudflare pendant le téléchargement", isOn: $modele.utiliserTunnel)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+                Text("— si le réseau bloque X ; recoupé automatiquement après")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }
             Text("La vidéo se charge ici, puis tu choisis l'action.")
                 .font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)

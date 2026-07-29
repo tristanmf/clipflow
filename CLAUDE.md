@@ -98,6 +98,31 @@ Principes :
   (Icône : déposer `app-video/AppIcon.png` — le build génère l'`.icns`. Nom interne du binaire : `Video`.)
 - **Coller un lien** : un champ « ou colle un lien » télécharge via **yt-dlp** (tous sites) dans
   `~/Movies/Sous-titrage`, puis charge la vidéo dans la zone → on choisit ensuite l'action.
+  Deux cases (mémorisées d'un lancement à l'autre) :
+  - **« Utiliser mes cookies Chrome »** (`--cookies-from-browser chrome`) : nécessaire pour les
+    vidéos X/Twitter qui exigent une session connectée — **même sur un tweet public**, X ne sert
+    plus les flux vidéo en anonyme (sinon : « No video could be found »). 1er usage : macOS
+    demande l'accès au Trousseau de Chrome.
+  - **« Tunnel Cloudflare pendant le téléchargement »** : voir la section réseau ci-dessous.
+  Le téléchargement est résilient aux coupures (`--socket-timeout 30`, `--retries 5`,
+  `--extractor-retries 3`). yt-dlp casse quand les sites changent → `bash maj-outils.sh`.
+
+## Piège réseau : un lien X qui échoue selon le lieu
+Sur certaines lignes (constaté sur une connexion rurale), le téléchargement d'une vidéo X échoue
+avec « Connection to api.x.com timed out », alors que **Safari affiche X normalement**. Ce n'est
+ni l'app, ni yt-dlp, ni les cookies :
+- **Cause** : l'opérateur ne route pas les plages IP de X (`162.159.128.0/19`, `172.66.0.0/16`).
+  Le DNS résout correctement, mais TCP/443 part dans le vide ; le traceroute meurt après le
+  3ᵉ saut. D'autres plages Cloudflare (`104.16.0.0/13`) répondent normalement. X n'a pas d'IPv6.
+- **Pourquoi Safari marche** : le **Relais privé iCloud** ne couvre que Safari et contourne le
+  trajet cassé. Chrome, `curl` et yt-dlp sortent en direct → échec. Le Relais privé ne peut PAS
+  être étendu aux autres applis (Apple le réserve à Safari).
+- **Diagnostic express** : `nc -vz -G 5 172.66.0.227 443` (X, doit répondre) vs
+  `nc -vz -G 5 104.16.123.96 443` (Cloudflare témoin). X en TIMEOUT + témoin OK = ce cas.
+- **Remèdes** : partage de connexion mobile, ou un tunnel couvrant toutes les applis
+  (`brew install --cask cloudflare-warp`). La case **« Tunnel Cloudflare »** de l'app fait
+  `warp-cli connect` avant le téléchargement et `disconnect` après (y compris en cas d'échec ou
+  d'annulation) ; si le tunnel était déjà actif, l'app n'y touche pas.
 
 ## Comment ce projet a été construit
 Tout le code (scripts shell + app SwiftUI) a été écrit par **Claude** (via Claude Code), à partir

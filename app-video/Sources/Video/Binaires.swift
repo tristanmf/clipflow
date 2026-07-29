@@ -30,6 +30,14 @@ enum Binaires {
     static var claude: String? { localiser("claude") }
     static var ytdlp: String? { localiser("yt-dlp") }
 
+    /// Cloudflare WARP (tunnel) — utile là où l'opérateur ne route pas les plages IP de X.
+    /// Installé par le cask `cloudflare-warp` ; binaire dans le PATH ou dans l'app.
+    static var warp: String? {
+        if let p = localiser("warp-cli") { return p }
+        let dansApp = "/Applications/Cloudflare WARP.app/Contents/Resources/warp-cli"
+        return FileManager.default.isExecutableFile(atPath: dansApp) ? dansApp : nil
+    }
+
     static let modeleWhisper = NSString(string: "~/.cache/whisper/ggml-large-v3-turbo-q5_0.bin").expandingTildeInPath
 
     /// Fichier du jeton d'automatisation Claude (voir CLAUDE.md → Authentification).

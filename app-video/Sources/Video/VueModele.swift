@@ -20,6 +20,14 @@ final class VueModele: ObservableObject {
     @Published var video: URL?
     @Published var srtFourni: URL?                       // mode « Utiliser mon .srt »
     @Published var lienEntree: String = ""               // « coller un lien » → yt-dlp
+    // Ces deux options dépendent du lieu (réseau) et de la vidéo : on les mémorise
+    // d'un lancement à l'autre pour ne pas avoir à les recocher chaque fois.
+    @Published var utiliserCookies: Bool = UserDefaults.standard.bool(forKey: "utiliserCookies") {
+        didSet { UserDefaults.standard.set(utiliserCookies, forKey: "utiliserCookies") }
+    }
+    @Published var utiliserTunnel: Bool = UserDefaults.standard.bool(forKey: "utiliserTunnel") {
+        didSet { UserDefaults.standard.set(utiliserTunnel, forKey: "utiliserTunnel") }
+    }
     @Published var niveauCompression: NiveauCompression = .equilibre
 
     @Published var phase: Phase = .pret
@@ -180,6 +188,8 @@ final class VueModele: ObservableObject {
         let manques = Binaires.verifierYtDlp()
         guard manques.isEmpty else { phase = .erreur(manques.joined(separator: "\n")); return }
 
+        let cookies = utiliserCookies ? "chrome" : nil
+        let tunnel = utiliserTunnel
         generation += 1
         let gen = generation
         let m = nouveauMoteur(gen)
@@ -188,7 +198,7 @@ final class VueModele: ObservableObject {
         fraction = nil
         tache = Task {
             let issue: Result<URL, Error>
-            do { issue = .success(try await m.telecharger(lien: lien)) }
+            do { issue = .success(try await m.telecharger(lien: lien, cookiesNavigateur: cookies, tunnel: tunnel)) }
             catch { issue = .failure(error) }
             guard self.generation == gen else { return }
             switch issue {
