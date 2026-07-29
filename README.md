@@ -101,6 +101,10 @@ la logique et les pièges rencontrés, [`CLAUDE.md`](CLAUDE.md) est la mémoire 
 - `compresser-video.sh` — compression H.264 CRF.
 - `maj-outils.sh` — met à jour les outils et affiche les versions.
 - `app-video/` — l'app macOS ClipFlow (SwiftUI). Voir [`app-video/README.md`](app-video/README.md).
+- `skill-cloud-soustitrage/` — variante **cloud** du sous-titrage, sous forme de *skill* pour
+  Claude : elle tourne dans l'environnement d'exécution de Claude, donc **sans Mac** (utilisable
+  depuis un téléphone). Modèle Whisper plus léger → qualité inférieure au local, mais dépanne
+  en déplacement. Le pipeline local reste l'outil de référence.
 - `CLAUDE.md` — la mémoire du projet (architecture, pièges, réglages).
 
 ## Licence
