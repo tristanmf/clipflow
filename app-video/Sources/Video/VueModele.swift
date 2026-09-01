@@ -20,14 +20,6 @@ final class VueModele: ObservableObject {
     @Published var video: URL?
     @Published var srtFourni: URL?                       // mode « Utiliser mon .srt »
     @Published var lienEntree: String = ""               // « coller un lien » → yt-dlp
-    // Ces deux options dépendent du lieu (réseau) et de la vidéo : on les mémorise
-    // d'un lancement à l'autre pour ne pas avoir à les recocher chaque fois.
-    @Published var utiliserCookies: Bool = UserDefaults.standard.bool(forKey: "utiliserCookies") {
-        didSet { UserDefaults.standard.set(utiliserCookies, forKey: "utiliserCookies") }
-    }
-    @Published var utiliserTunnel: Bool = UserDefaults.standard.bool(forKey: "utiliserTunnel") {
-        didSet { UserDefaults.standard.set(utiliserTunnel, forKey: "utiliserTunnel") }
-    }
     @Published var niveauCompression: NiveauCompression = .equilibre
 
     @Published var phase: Phase = .pret
@@ -90,9 +82,18 @@ final class VueModele: ObservableObject {
             return
         }
         guard extensionsAcceptees.contains(ext) else { return }
+        if url != video { effacerAnalyse() }     // autre vidéo → l'ancienne transcription ne vaut plus
         video = url
         if case .termine = phase { phase = .pret }
         if case .erreur = phase { phase = .pret }
+    }
+
+    /// Ouvre dans le Finder le dossier de sortie du mode courant (le dossier est
+    /// créé s'il n'existe pas encore, pour ne jamais ouvrir dans le vide).
+    func ouvrirDossierSortie() {
+        let voulu = (mode == .compresser) ? Dossiers.compression : Dossiers.sousTitrage
+        let chemin = (try? Dossiers.preparer(voulu)) ?? voulu
+        NSWorkspace.shared.open(URL(fileURLWithPath: chemin))
     }
 
     func reinitialiser() {
@@ -103,6 +104,17 @@ final class VueModele: ObservableObject {
         phase = .pret
         etapeLibelle = ""
         fraction = nil
+        effacerAnalyse()
+        srtFourni = nil
+        // Après un changement de mode, une vidéo valide pour l'ancien mode
+        // (ex. .webm en compression) peut ne plus l'être : on la retire.
+        if let v = video, !extensionsAcceptees.contains(v.pathExtension.lowercased()) {
+            video = nil
+        }
+    }
+
+    /// Oublie la transcription et le sommaire (autre vidéo → autre analyse).
+    private func effacerAnalyse() {
         blocsSommaire = []
         selection = []
         srtComplet = []
@@ -110,12 +122,6 @@ final class VueModele: ObservableObject {
         demandeNaturelle = ""
         debutExtrait = nil
         finExtrait = nil
-        srtFourni = nil
-        // Après un changement de mode, une vidéo valide pour l'ancien mode
-        // (ex. .webm en compression) peut ne plus l'être : on la retire.
-        if let v = video, !extensionsAcceptees.contains(v.pathExtension.lowercased()) {
-            video = nil
-        }
     }
 
     func annuler() {
@@ -188,8 +194,6 @@ final class VueModele: ObservableObject {
         let manques = Binaires.verifierYtDlp()
         guard manques.isEmpty else { phase = .erreur(manques.joined(separator: "\n")); return }
 
-        let cookies = utiliserCookies ? "chrome" : nil
-        let tunnel = utiliserTunnel
         generation += 1
         let gen = generation
         let m = nouveauMoteur(gen)
@@ -198,11 +202,12 @@ final class VueModele: ObservableObject {
         fraction = nil
         tache = Task {
             let issue: Result<URL, Error>
-            do { issue = .success(try await m.telecharger(lien: lien, cookiesNavigateur: cookies, tunnel: tunnel)) }
+            do { issue = .success(try await m.telecharger(lien: lien)) }
             catch { issue = .failure(error) }
             guard self.generation == gen else { return }
             switch issue {
             case .success(let fichier):
+                self.effacerAnalyse()
                 self.video = fichier
                 self.srtFourni = nil
                 self.lienEntree = ""
@@ -312,6 +317,21 @@ final class VueModele: ObservableObject {
     func retourChoixExtrait() {
         debutExtrait = nil
         finExtrait = nil
+        phase = .choixExtrait
+    }
+
+    /// Après une extraction, la transcription et le sommaire sont encore là : on
+    /// peut choisir un autre passage de la même vidéo SANS tout retranscrire.
+    var peutExtraireAutrePassage: Bool {
+        mode == .extraire && !blocsSommaire.isEmpty && !srtComplet.isEmpty
+    }
+
+    func extraireAutrePassage() {
+        guard peutExtraireAutrePassage else { reinitialiser(); return }
+        debutExtrait = nil
+        finExtrait = nil
+        selection = []
+        demandeNaturelle = ""
         phase = .choixExtrait
     }
 }

@@ -6,14 +6,26 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Picker("", selection: $modele.mode) {
-                ForEach(ModeApp.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
+            HStack(spacing: 10) {
+                Picker("", selection: $modele.mode) {
+                    ForEach(ModeApp.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(modele.enCours)
+
+                // Toujours accessible, quelle que soit l'étape : ouvre le dossier
+                // de sortie du mode courant (Sous-titrage ou Compression).
+                Button { modele.ouvrirDossierSortie() } label: {
+                    Image(systemName: "folder")
+                }
+                .buttonStyle(.bordered)
+                .help(modele.mode == .compresser
+                      ? "Ouvrir le dossier des vidéos compressées"
+                      : "Ouvrir le dossier des vidéos traitées")
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .disabled(modele.enCours)
             .padding(.horizontal)
 
             contenuPrincipal
@@ -102,23 +114,7 @@ struct PanneauPreparation: View {
                 Button("Télécharger") { modele.telecharger() }
                     .disabled(modele.lienEntree.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            HStack(spacing: 6) {
-                Toggle("Utiliser mes cookies Chrome", isOn: $modele.utiliserCookies)
-                    .toggleStyle(.checkbox)
-                    .font(.caption)
-                Text("— pour les vidéos X qui exigent d'être connecté")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-            }
-            HStack(spacing: 6) {
-                Toggle("Tunnel Cloudflare pendant le téléchargement", isOn: $modele.utiliserTunnel)
-                    .toggleStyle(.checkbox)
-                    .font(.caption)
-                Text("— si le réseau bloque X ; recoupé automatiquement après")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-            }
-            Text("La vidéo se charge ici, puis tu choisis l'action.")
+            Text("La vidéo se charge ici, puis tu choisis l'action. Connexion au site et tunnel réseau : gérés automatiquement.")
                 .font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -456,6 +452,10 @@ struct PanneauResultat: View {
                     NSWorkspace.shared.activateFileViewerSelecting([resultat.url])
                 }
                 .buttonStyle(.borderedProminent)
+                if modele.peutExtraireAutrePassage {
+                    // La transcription est conservée : second passage sans attente.
+                    Button("Extraire un autre passage") { modele.extraireAutrePassage() }
+                }
                 Button("Nouveau traitement") { modele.reinitialiser() }
             }
             .controlSize(.large)

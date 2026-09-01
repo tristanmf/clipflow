@@ -98,14 +98,24 @@ Principes :
   (Icône : déposer `app-video/AppIcon.png` — le build génère l'`.icns`. Nom interne du binaire : `Video`.)
 - **Coller un lien** : un champ « ou colle un lien » télécharge via **yt-dlp** (tous sites) dans
   `~/Movies/Sous-titrage`, puis charge la vidéo dans la zone → on choisit ensuite l'action.
-  Deux cases (mémorisées d'un lancement à l'autre) :
-  - **« Utiliser mes cookies Chrome »** (`--cookies-from-browser chrome`) : nécessaire pour les
-    vidéos X/Twitter qui exigent une session connectée — **même sur un tweet public**, X ne sert
-    plus les flux vidéo en anonyme (sinon : « No video could be found »). 1er usage : macOS
-    demande l'accès au Trousseau de Chrome.
-  - **« Tunnel Cloudflare pendant le téléchargement »** : voir la section réseau ci-dessous.
-  Le téléchargement est résilient aux coupures (`--socket-timeout 30`, `--retries 5`,
-  `--extractor-retries 3`). yt-dlp casse quand les sites changent → `bash maj-outils.sh`.
+  Tout ce qui dépend du lieu ou du site est **automatique** (rien à cocher) :
+  - **Cookies** : premier essai en anonyme ; si le site refuse (X exige une session connectée
+    **même sur un tweet public** → « No video could be found »), l'app réessaie seule avec
+    `--cookies-from-browser chrome`. 1er usage : macOS demande l'accès au Trousseau de Chrome.
+  - **Tunnel** : voir la section réseau ci-dessous.
+  Téléchargement plafonné à **1080p** (la 4K n'apporte rien à un clip et ralentit tout derrière),
+  résilient aux coupures (`--socket-timeout 30`, `--retries 5`, `--extractor-retries 3`).
+  yt-dlp casse quand les sites changent → `bash maj-outils.sh`.
+- **Échec rapide** : avant toute transcription (des minutes), l'app vérifie en quelques secondes
+  que `claude` répond (`verifierClaude`) ; session expirée → message clair (« ouvre le Terminal,
+  `claude`, `/login` ») au lieu d'un échec à la toute fin. Garde-fou iCloud (`assurerFichierLocal`) :
+  fichier évincé → `brctl download` et attente jusqu'à 3 min avant de commencer.
+- **Extraire un autre passage** : après une extraction, transcription et sommaire sont conservés →
+  bouton sur l'écran de résultat, sans retranscrire (effacés dès qu'une autre vidéo est chargée).
+  La coupe intermédiaire d'un extrait à sous-titrer est faite en `ultrafast`/CRF 16 (quasi sans
+  perte), la gravure fixant la qualité finale : un seul encodage lent au lieu de deux.
+- **Bouton dossier** (à côté des onglets, toujours visible) : ouvre `~/Movies/Sous-titrage`, ou
+  `~/Movies/Compression` sur l'onglet Compresser.
 
 ## Piège réseau : un lien X qui échoue selon le lieu
 Sur certaines lignes (constaté sur une connexion rurale), le téléchargement d'une vidéo X échoue
@@ -120,9 +130,12 @@ ni l'app, ni yt-dlp, ni les cookies :
 - **Diagnostic express** : `nc -vz -G 5 172.66.0.227 443` (X, doit répondre) vs
   `nc -vz -G 5 104.16.123.96 443` (Cloudflare témoin). X en TIMEOUT + témoin OK = ce cas.
 - **Remèdes** : partage de connexion mobile, ou un tunnel couvrant toutes les applis
-  (`brew install --cask cloudflare-warp`). La case **« Tunnel Cloudflare »** de l'app fait
-  `warp-cli connect` avant le téléchargement et `disconnect` après (y compris en cas d'échec ou
-  d'annulation) ; si le tunnel était déjà actif, l'app n'y touche pas.
+  (`brew install --cask cloudflare-warp`). **Dans l'app, c'est automatique** : avant un
+  téléchargement, elle teste `nc -z -G 4 <hôte> 443` ; si le serveur ne répond pas et que WARP est
+  installé, elle fait `warp-cli connect` avant et `disconnect` après (y compris en cas d'échec ou
+  d'annulation) — le trafic ne passe par Cloudflare que le temps du transfert, et seulement quand
+  c'est nécessaire. Si le tunnel était déjà actif, l'app n'y touche pas. Sans WARP : message qui
+  propose le partage de connexion mobile ou l'installation.
 
 ## Comment ce projet a été construit
 Tout le code (scripts shell + app SwiftUI) a été écrit par **Claude** (via Claude Code), à partir

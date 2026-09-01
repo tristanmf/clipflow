@@ -14,10 +14,11 @@ final class Moteur: @unchecked Sendable {
     static let suffixeAuto = "_FR"
 
     let executeur = Executeur()
-    /// Exécuteur dédié aux commandes du tunnel : séparé pour que la coupure du
-    /// tunnel fonctionne encore APRÈS une annulation (l'exécuteur principal est
-    /// alors marqué annulé et refuserait de lancer quoi que ce soit).
-    private let executeurTunnel = Executeur()
+    /// Exécuteur auxiliaire (tunnel WARP, test de connexion, rapatriement iCloud) :
+    /// séparé pour que la coupure du tunnel fonctionne encore APRÈS une annulation
+    /// (l'exécuteur principal est alors marqué annulé et refuserait de lancer quoi
+    /// que ce soit).
+    private let executeurAuxiliaire = Executeur()
 
     /// Rappel de progression : (libellé de l'étape, fraction 0…1 ou nil = indéterminé)
     var progression: @Sendable (String, Double?) -> Void = { _, _ in }
@@ -42,6 +43,27 @@ final class Moteur: @unchecked Sendable {
     private func binaire(_ nom: String, _ chemin: String?) throws -> String {
         guard let chemin else { throw ErreurTraitement.echec("\(nom) introuvable.") }
         return chemin
+    }
+
+    /// Fichier iCloud évincé (« Optimiser le stockage du Mac ») : le nom est dans le
+    /// Finder mais les données ne sont plus sur le disque, et ffmpeg échoue avec
+    /// « Resource deadlock avoided ». On force le rapatriement avant de commencer
+    /// (même garde-fou que les scripts shell — voir CLAUDE.md → Piège iCloud).
+    func assurerFichierLocal(_ url: URL) async throws {
+        func lisible() -> Bool {
+            guard let fh = try? FileHandle(forReadingFrom: url) else { return false }
+            defer { try? fh.close() }
+            do { _ = try fh.read(upToCount: 1); return true } catch { return false }
+        }
+        if lisible() { return }
+        etape("Rapatriement du fichier depuis iCloud…", nil)
+        _ = try? await executeurAuxiliaire.lancer("/usr/bin/brctl", ["download", url.path])
+        for _ in 0..<180 {                           // jusqu'à 3 min, comme le script
+            if executeur.annule { throw ErreurTraitement.annule }
+            if lisible() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        throw ErreurTraitement.echec("« \(url.lastPathComponent) » est sur iCloud mais pas sur ce Mac, et le rapatriement n'a pas abouti. Ouvre-le une fois dans le Finder (double-clic), attends la fin du téléchargement, puis relance.")
     }
 
     /// Durée de la vidéo en secondes (ffprobe, avec repli sur ffmpeg).
@@ -167,11 +189,33 @@ final class Moteur: @unchecked Sendable {
             // claude écrit parfois l'erreur sur stdout, pas stderr → on prend les deux
             let err = r.erreurs.trimmingCharacters(in: .whitespacesAndNewlines)
             let out = r.sortie.trimmingCharacters(in: .whitespacesAndNewlines)
-            let detail = (err.isEmpty ? out : err).suffix(400)
-            let suffixe = detail.isEmpty ? "" : "\n\n\(detail)"
-            throw ErreurTraitement.echec("Appel Claude échoué (jeton expiré ? voir CLAUDE.md → Authentification).\(suffixe)")
+            let detail = err.isEmpty ? out : err
+            let d = detail.lowercased()
+            if d.contains("not logged in") || d.contains("/login") || d.contains("401")
+                || d.contains("authentication") || d.contains("oauth") {
+                throw ErreurTraitement.echec(Moteur.messageReconnexion)
+            }
+            let suffixe = detail.isEmpty ? "" : "\n\n\(detail.suffix(400))"
+            throw ErreurTraitement.echec("Appel Claude échoué.\(suffixe)")
         }
         return r.sortie
+    }
+
+    /// Message unique, en clair, quand Claude n'est plus connecté sur ce Mac.
+    static let messageReconnexion = """
+        Claude n'est plus connecté sur ce Mac (la session a expiré).
+
+        Pour réparer : ouvre le Terminal, tape « claude », puis « /login »,
+        connecte-toi dans le navigateur qui s'ouvre, puis tape « /exit ».
+        Relance ensuite le traitement.
+        """
+
+    /// Vérifie en quelques secondes que Claude répond, AVANT de lancer une
+    /// transcription de plusieurs minutes qui échouerait sinon… à la toute fin,
+    /// au moment de la traduction. Échec rapide plutôt que temps perdu.
+    func verifierClaude() async throws {
+        etape("Vérification de la connexion à Claude…", nil)
+        _ = try await appelerClaude("Réponds uniquement : OK")
     }
 
     /// Traduction d'un SRT en français — prompt IDENTIQUE au script.
@@ -245,6 +289,8 @@ final class Moteur: @unchecked Sendable {
     func sousTitrer(video: URL, srtFourni: URL?) async throws -> ResultatTraitement {
         let sortieDossier = try Dossiers.preparer(Dossiers.sousTitrage)
         let nom = video.deletingPathExtension().lastPathComponent
+        try await assurerFichierLocal(video)
+        if let srtFourni { try await assurerFichierLocal(srtFourni) }
         let dureeTotale = await duree(video)
 
         if let srtFourni {
@@ -261,6 +307,9 @@ final class Moteur: @unchecked Sendable {
         }
 
         // ── Mode auto ──
+        // Claude est presque toujours nécessaire (vidéos en anglais) : on s'assure
+        // qu'il répond AVANT les minutes de transcription, pas après.
+        try await verifierClaude()
         let (srtBrut, langue) = try await transcrireVideo(video, dureeTotale: dureeTotale)
 
         let estFrancais = (langue == "fr")
@@ -294,7 +343,9 @@ final class Moteur: @unchecked Sendable {
 
     /// Phase 1 : transcription + sommaire thématique par Claude.
     func analyserPourExtraction(video: URL) async throws -> (blocs: [BlocSommaire], srt: [BlocSRT], langue: String?) {
+        try await assurerFichierLocal(video)
         let dureeTotale = await duree(video)
+        try await verifierClaude()                   // échec rapide si la session a expiré
         let (srtBrut, langue) = try await transcrireVideo(video, dureeTotale: dureeTotale)
         let blocsSRT = SRT.analyser(srtBrut)
         guard !blocsSRT.isEmpty else { throw ErreurTraitement.echec("Transcription vide.") }
@@ -352,6 +403,11 @@ final class Moteur: @unchecked Sendable {
         let nom = video.deletingPathExtension().lastPathComponent
         let dureeExtrait = fin - debut
 
+        // Si l'extrait sera ensuite sous-titré, cette coupe n'est qu'un intermédiaire
+        // (la gravure réencode derrière) : on la fait très vite et quasi sans perte,
+        // pour ne pas payer deux encodages lents ni cumuler deux pertes de qualité.
+        let (preset, crf) = sousTitrer ? ("ultrafast", "16") : ("fast", "20")
+
         etape("Coupe du passage…", 0)
         let rapporter = progression
         let cut = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("extrait_\(UUID().uuidString).mp4")
@@ -365,7 +421,7 @@ final class Moteur: @unchecked Sendable {
             "-ss", String(format: "%.3f", debut),
             "-i", video.path,
             "-t", String(format: "%.3f", dureeExtrait),
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            "-c:v", "libx264", "-preset", preset, "-crf", crf,
             "-pix_fmt", "yuv420p", "-movflags", "+faststart",
             "-c:a", "aac", "-b:a", "192k", cut.path
         ], surLigneErreur: { ligne in
@@ -435,16 +491,12 @@ final class Moteur: @unchecked Sendable {
         return min(1.0, p / 100)
     }
 
-    /// Télécharge la vidéo d'un lien via yt-dlp, dans ~/Movies/Sous-titrage, en mp4
-    /// (remux sans réencodage quand possible). Retourne le fichier local, prêt à
-    /// enchaîner sur l'une des trois actions. yt-dlp casse régulièrement quand un
-    /// site change ses endpoints → le message d'erreur pointe vers sa mise à jour.
-    // ── Tunnel Cloudflare WARP (optionnel, le temps du téléchargement) ──
+    // ── Tunnel Cloudflare WARP (automatique, le temps du téléchargement) ──
 
     /// Le tunnel est-il actif ? (« Disconnected » contient « connected » → on
     /// teste l'absence de « disconnected » d'abord.)
     private func tunnelActif(_ warp: String) async -> Bool {
-        guard let r = try? await executeurTunnel.lancer(warp, ["status"]) else { return false }
+        guard let r = try? await executeurAuxiliaire.lancer(warp, ["status"]) else { return false }
         let t = (r.sortie + r.erreurs).lowercased()
         if t.contains("disconnected") || t.contains("connecting") { return false }
         return t.contains("connected")
@@ -453,8 +505,8 @@ final class Moteur: @unchecked Sendable {
     /// Lance une sous-commande warp-cli (avec repli si `--accept-tos` est inconnu
     /// de la version installée).
     private func warpCommande(_ warp: String, _ sousCommande: String) async {
-        let r = try? await executeurTunnel.lancer(warp, ["--accept-tos", sousCommande])
-        if r?.code != 0 { _ = try? await executeurTunnel.lancer(warp, [sousCommande]) }
+        let r = try? await executeurAuxiliaire.lancer(warp, ["--accept-tos", sousCommande])
+        if r?.code != 0 { _ = try? await executeurAuxiliaire.lancer(warp, [sousCommande]) }
     }
 
     /// Active le tunnel. Retourne true si c'est NOUS qui l'avons activé (donc à
@@ -467,6 +519,7 @@ final class Moteur: @unchecked Sendable {
         etape("Activation du tunnel Cloudflare…", nil)
         await warpCommande(warp, "connect")
         for _ in 0..<20 {                            // jusqu'à ~20 s
+            if executeur.annule { throw ErreurTraitement.annule }
             if await tunnelActif(warp) { return true }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
@@ -479,16 +532,36 @@ final class Moteur: @unchecked Sendable {
         await warpCommande(warp, "disconnect")
     }
 
-    /// `cookiesNavigateur` (ex. "chrome") = passe `--cookies-from-browser` à yt-dlp,
-    /// indispensable pour les vidéos X/Twitter qui exigent d'être connecté (même
-    /// publiques : X ne sert plus les flux vidéo en anonyme).
-    /// `tunnel` = active Cloudflare WARP le temps du téléchargement puis le recoupe
-    /// (utile là où l'opérateur ne route pas les plages IP de X — voir CLAUDE.md).
-    func telecharger(lien: String, cookiesNavigateur: String? = nil, tunnel: Bool = false) async throws -> URL {
+    /// Le serveur du lien répond-il en direct ? (TCP 443, 4 s maxi — /usr/bin/nc
+    /// existe sur tout macOS.) C'est le diagnostic express de CLAUDE.md, automatisé.
+    private func hoteJoignable(_ hote: String) async -> Bool {
+        guard let r = try? await executeurAuxiliaire.lancer("/usr/bin/nc", ["-z", "-G", "4", hote, "443"]) else { return false }
+        return r.code == 0
+    }
+
+    /// Télécharge la vidéo d'un lien via yt-dlp, dans ~/Movies/Sous-titrage, en mp4
+    /// (remux sans réencodage quand possible). Retourne le fichier local, prêt à
+    /// enchaîner sur l'une des trois actions.
+    ///
+    /// Tout ce qui dépend du lieu ou du site est AUTOMATIQUE — rien à cocher :
+    /// - si le serveur est injoignable en direct (opérateur qui ne route pas X…) et
+    ///   que Cloudflare WARP est installé, le tunnel est ouvert le temps du transfert
+    ///   puis refermé (y compris en cas d'échec ou d'annulation) ;
+    /// - si le site refuse la vidéo en anonyme (X exige d'être connecté, même pour
+    ///   un tweet public), on réessaie avec la session Chrome de Tristan.
+    func telecharger(lien: String) async throws -> URL {
         var tunnelParNous = false
-        if tunnel { tunnelParNous = try await activerTunnel() }
+        if let hote = URL(string: lien)?.host {
+            etape("Vérification de la connexion…", nil)
+            if !(await hoteJoignable(hote)) {
+                guard Binaires.warp != nil else {
+                    throw ErreurTraitement.echec("Impossible de joindre \(hote) depuis ce réseau.\n\nDeux solutions : passer par le partage de connexion de l'iPhone, ou installer le tunnel Cloudflare (Terminal : brew install --cask cloudflare-warp) — l'app l'activera ensuite toute seule quand c'est nécessaire.")
+                }
+                tunnelParNous = try await activerTunnel()
+            }
+        }
         do {
-            let fichier = try await telechargerSansTunnel(lien: lien, cookiesNavigateur: cookiesNavigateur)
+            let fichier = try await telechargerAvecRepliCookies(lien: lien)
             if tunnelParNous { await couperTunnel() }
             return fichier
         } catch {
@@ -498,7 +571,26 @@ final class Moteur: @unchecked Sendable {
         }
     }
 
-    private func telechargerSansTunnel(lien: String, cookiesNavigateur: String?) async throws -> URL {
+    /// Premier essai en anonyme ; si le site réclame une session, second essai
+    /// avec les cookies de Chrome (macOS demande alors l'accès au Trousseau, une fois).
+    private func telechargerAvecRepliCookies(lien: String) async throws -> URL {
+        do {
+            return try await telechargerBrut(lien: lien, cookiesNavigateur: nil)
+        } catch ErreurTraitement.echec(let message) where Moteur.exigeUneSession(message) {
+            etape("Le site demande d'être connecté : nouvel essai avec ta session Chrome…", nil)
+            return try await telechargerBrut(lien: lien, cookiesNavigateur: "chrome")
+        }
+    }
+
+    /// L'échec ressemble-t-il à une vidéo servie seulement aux comptes connectés ?
+    private static func exigeUneSession(_ message: String) -> Bool {
+        let m = message.lowercased()
+        return m.contains("no video could be found") || m.contains("login") || m.contains("log in")
+            || m.contains("sign in") || m.contains("nsfw") || m.contains("age-restricted")
+            || m.contains("cookies")
+    }
+
+    private func telechargerBrut(lien: String, cookiesNavigateur: String?) async throws -> URL {
         let ytdlp = try binaire("yt-dlp", Binaires.ytdlp)
         let dossier = try Dossiers.preparer(Dossiers.sousTitrage)
         let identifiant = "clipflow_\(UUID().uuidString.prefix(8))"
@@ -513,7 +605,10 @@ final class Moteur: @unchecked Sendable {
         var args = [
             "--no-playlist",
             "--newline",                     // progression ligne par ligne (pas de \r)
-            "-f", "bv*+ba/b",                // meilleure vidéo+audio, repli meilleur unique
+            // Meilleure vidéo+audio, plafonnée à 1080p : au-delà (4K YouTube), le fichier
+            // est bien plus lourd sans intérêt pour un clip réseaux sociaux, et chaque
+            // étape suivante (gravure, compression) serait d'autant plus lente.
+            "-f", "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b",
             "--remux-video", "mp4",          // conteneur mp4 sans réencodage si possible
             // Résilience aux coupures passagères (X/Twitter time out souvent) :
             "--socket-timeout", "30",        // délai de connexion allongé (défaut 20 s)
@@ -536,13 +631,18 @@ final class Moteur: @unchecked Sendable {
         guard r.code == 0 else {
             let err = r.erreurs.trimmingCharacters(in: .whitespacesAndNewlines)
             let out = r.sortie.trimmingCharacters(in: .whitespacesAndNewlines)
-            let detail = (err.isEmpty ? out : err).suffix(400)
+            let detail = String((err.isEmpty ? out : err).suffix(400))
+            let d = detail.lowercased()
+            let conseil: String
+            if cookiesNavigateur != nil && Moteur.exigeUneSession(detail) {
+                conseil = "Même avec ta session Chrome, le site ne donne pas cette vidéo : elle a peut-être été supprimée, ou le compte est protégé. Vérifie aussi que Chrome est bien connecté à ce site."
+            } else if d.contains("timed out") || d.contains("timeout") {
+                conseil = "Le site n'a pas répondu (réseau). Réessaie ; si ça persiste sur ce réseau, passe par le partage de connexion de l'iPhone."
+            } else {
+                conseil = "Si le site a changé, mets yt-dlp à jour : brew upgrade yt-dlp"
+            }
             let suffixe = detail.isEmpty ? "" : "\n\n\(detail)"
-            // Indice utile si l'échec ressemble à une vidéo X protégée et qu'on n'a pas passé de cookies.
-            let indiceCookies = (cookiesNavigateur == nil && detail.lowercased().contains("no video"))
-                ? "\n\nAstuce : pour une vidéo X/Twitter, coche « Utiliser mes cookies » — X exige d'être connecté, même pour un tweet public."
-                : "\n\nSi le site a changé, mets yt-dlp à jour : brew upgrade yt-dlp"
-            throw ErreurTraitement.echec("Téléchargement échoué.\(indiceCookies)\(suffixe)")
+            throw ErreurTraitement.echec("Téléchargement échoué.\n\n\(conseil)\(suffixe)")
         }
 
         // Retrouver le fichier produit (mp4 attendu ; sinon même préfixe, autre conteneur).
@@ -564,6 +664,7 @@ final class Moteur: @unchecked Sendable {
         let sortieDossier = try Dossiers.preparer(Dossiers.compression)
         let nom = video.deletingPathExtension().lastPathComponent
         let sortie = URL(fileURLWithPath: sortieDossier).appendingPathComponent("\(nom)_compressed.mp4")
+        try await assurerFichierLocal(video)
         let dureeTotale = await duree(video)
 
         etape("Compression…", 0)
