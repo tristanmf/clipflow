@@ -86,7 +86,12 @@ nette aux timecodes exacts, sous-titrage seulement si demandé), **Compresser** 
 Principes :
 - **Interface, pas nouveau moteur** : `Moteur.swift` transpose fidèlement les scripts shell
   (mêmes commandes ffmpeg/whisper-cli/`claude -p`, même style, mêmes sorties). Les Folder Actions
-  restent en place.
+  restent en place. ⚠️ ClipFlow dépose ses fichiers dans le dossier surveillé
+  (`~/Movies/Sous-titrage`) : sans précaution, chaque téléchargement ou extrait y réveillait la
+  Folder Action, qui le sous-titrait sans qu'on l'ait demandé. Le script ignore donc les noms
+  produits par ClipFlow (`clipflow_*`, `*_extrait`, `*_qt`, `*_compressed`, en plus de `_ST`/`_FR`).
+  Il rapatrie aussi les fichiers iCloud « évincés » avant ffmpeg (`brctl download`, 3 min max),
+  sans quoi ffmpeg échoue en « Resource deadlock avoided ».
 - **Piège géré** : après la coupe d'un extrait, les timecodes du SRT sont **rebasés sur zéro**
   (`SRT.extraireEtRebaser`) sinon les sous-titres seraient décalés.
 - Coupe d'extrait : **seek d'entrée** (`-ss` avant `-i`) + `-t` → rapide même en fin de longue
@@ -105,6 +110,11 @@ Principes :
   - **Tunnel** : voir la section réseau ci-dessous.
   Téléchargement plafonné à **1080p** (la 4K n'apporte rien à un clip et ralentit tout derrière),
   résilient aux coupures (`--socket-timeout 30`, `--retries 5`, `--extractor-retries 3`).
+  **Lisible par QuickTime** : sans consigne, yt-dlp prenait souvent de l'**AV1 + Opus** (YouTube),
+  rangé tel quel dans un `.mp4` → « il manque un codec ». L'app demande donc du H.264 + AAC
+  (`-S vcodec:h264,res,acodec:m4a`), puis `rendreCompatibleQuickTime` vérifie les codecs et
+  convertit si besoin — ce qui est lisible est recopié, seul le reste est réencodé. La gravure ne
+  recopie le son que s'il est AAC/MP3/ALAC.
   yt-dlp casse quand les sites changent → `bash maj-outils.sh`.
 - **Échec rapide** : avant toute transcription (des minutes), l'app vérifie en quelques secondes
   que `claude` répond (`verifierClaude`) ; session expirée → message clair (« ouvre le Terminal,

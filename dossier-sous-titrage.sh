@@ -100,6 +100,28 @@ for f in "$@"; do
   # Garde-fou : ignorer noms vides/anormaux et nos propres sorties (anti-boucle)
   [ -z "${name// /}" ] && continue
   case "$name" in *"$SUF_MANUAL"|*"$SUF_AUTO") continue ;; esac
+  # ClipFlow dépose aussi ses fichiers dans ce dossier (téléchargements clipflow_…,
+  # extraits bruts …_extrait, conversions temporaires …_qt) : ils ne doivent jamais
+  # déclencher de sous-titrage automatique.
+  case "$name" in clipflow_*|*_extrait|*_qt|*_compressed) continue ;; esac
+
+  # ── iCloud : un fichier « évincé » (Bureau/Documents synchronisés + « Optimiser le
+  #    stockage du Mac ») garde son nom et sa taille affichés, mais ses données ne sont
+  #    plus sur le disque. ffmpeg ne sait pas déclencher le rapatriement et sort en
+  #    erreur « Resource deadlock avoided ». On force le téléchargement puis on attend
+  #    que le fichier soit réellement lisible (3 min max). Voir CLAUDE.md.
+  if ! head -c 1 "$f" >/dev/null 2>&1; then
+    notify "Téléchargement iCloud…" "$base n'est pas sur le disque, rapatriement en cours"
+    [ -x /usr/bin/brctl ] && /usr/bin/brctl download "$f" >/dev/null 2>&1
+    n=0
+    while ! head -c 1 "$f" >/dev/null 2>&1 && [ "$n" -lt 180 ]; do
+      sleep 1; n=$((n+1))
+    done
+    if ! head -c 1 "$f" >/dev/null 2>&1; then
+      notify "Sous-titrage — échec ❌" "$base est resté sur iCloud. Ouvre-le une fois dans le Finder (attends la fin de la jauge), puis relance."
+      continue
+    fi
+  fi
 
   # Dossier de sortie : sous-dossier non surveillé (évite tout re-déclenchement)
   if [ -n "$OUTDIR" ]; then out_dir="$OUTDIR"; else out_dir="$dir/$OUTSUB"; fi

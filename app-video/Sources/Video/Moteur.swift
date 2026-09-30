@@ -264,8 +264,14 @@ final class Moteur: @unchecked Sendable {
 
         do {
             var derniere: Int32 = -1
-            // Comme le script : d'abord -c:a copy, repli -c:a aac 192k si échec.
-            for audio in [["-c:a", "copy"], ["-c:a", "aac", "-b:a", "192k"]] {
+            // Comme le script : d'abord -c:a copy, repli aac 192k si échec — mais on ne
+            // recopie QUE ce que QuickTime sait lire : une source Opus recopiée telle
+            // quelle donnerait un .mp4 « codec manquant ».
+            let audioLisible = Moteur.audioCompatibleQuickTime.contains(await codec(video, "a") ?? "?")
+            let essais: [[String]] = audioLisible
+                ? [["-c:a", "copy"], ["-c:a", "aac", "-b:a", "192k"]]
+                : [["-c:a", "aac", "-b:a", "192k"]]
+            for audio in essais {
                 let r = try await executeur.lancer(ffmpeg, base + audio + [sortie.path], surLigneErreur: surErreur)
                 derniere = r.code
                 if r.code == 0 { break }
@@ -563,7 +569,8 @@ final class Moteur: @unchecked Sendable {
         do {
             let fichier = try await telechargerAvecRepliCookies(lien: lien)
             if tunnelParNous { await couperTunnel() }
-            return fichier
+            // Conversion éventuelle APRÈS la coupure du tunnel : elle n'a pas besoin du réseau.
+            return try await rendreCompatibleQuickTime(fichier)
         } catch {
             // Coupure garantie aussi en cas d'échec OU d'annulation.
             if tunnelParNous { await couperTunnel() }
@@ -609,6 +616,9 @@ final class Moteur: @unchecked Sendable {
             // est bien plus lourd sans intérêt pour un clip réseaux sociaux, et chaque
             // étape suivante (gravure, compression) serait d'autant plus lente.
             "-f", "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b",
+            // Préférer H.264 + AAC : les seuls codecs que QuickTime lit à coup sûr.
+            // Sans ça, YouTube sert de l'AV1/VP9 + Opus → « codec manquant ».
+            "-S", "vcodec:h264,res,acodec:m4a",
             "--remux-video", "mp4",          // conteneur mp4 sans réencodage si possible
             // Résilience aux coupures passagères (X/Twitter time out souvent) :
             "--socket-timeout", "30",        // délai de connexion allongé (défaut 20 s)
@@ -653,6 +663,78 @@ final class Moteur: @unchecked Sendable {
             return URL(fileURLWithPath: "\(dossier)/\(nom)")
         }
         throw ErreurTraitement.echec("Téléchargement terminé mais fichier introuvable.")
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Compatibilité QuickTime
+    // ─────────────────────────────────────────────────────────────
+
+    /// Codecs que QuickTime lit dans un .mp4 ("" = pas de flux de ce type).
+    static let videoCompatibleQuickTime: Set<String> = ["h264", "hevc", ""]
+    static let audioCompatibleQuickTime: Set<String> = ["aac", "mp3", "alac", ""]
+
+    /// Codec du premier flux vidéo ("v") ou audio ("a") : "h264", "av1", "opus"…
+    /// "" s'il n'y a pas de tel flux, nil si ffprobe ne peut pas répondre.
+    private func codec(_ fichier: URL, _ flux: String) async -> String? {
+        guard let ffprobe = Binaires.ffprobe,
+              let r = try? await executeur.lancer(ffprobe, [
+                "-v", "error", "-select_streams", "\(flux):0",
+                "-show_entries", "stream=codec_name",
+                "-of", "default=noprint_wrappers=1:nokey=1", fichier.path]),
+              r.code == 0
+        else { return nil }
+        return r.sortie.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// QuickTime ne lit ni l'AV1/VP9 ni l'Opus (« il manque un codec »). Si un
+    /// téléchargement en contient malgré la préférence H.264/AAC demandée à yt-dlp
+    /// (certaines vidéos n'existent qu'en AV1), on convertit : ce qui est déjà lisible
+    /// est recopié tel quel, seul le reste est réencodé.
+    private func rendreCompatibleQuickTime(_ fichier: URL) async throws -> URL {
+        guard let ffmpeg = Binaires.ffmpeg,
+              let video = await codec(fichier, "v"),
+              let audio = await codec(fichier, "a")
+        else { return fichier }                        // indéterminable : on ne touche à rien
+        let videoOK = Moteur.videoCompatibleQuickTime.contains(video)
+        let audioOK = Moteur.audioCompatibleQuickTime.contains(audio)
+        if videoOK && audioOK && fichier.pathExtension.lowercased() == "mp4" { return fichier }
+
+        var args = ["-y", "-i", fichier.path]
+        switch video {
+        case "":     break
+        case "h264": args += ["-c:v", "copy"]
+        case "hevc": args += ["-c:v", "copy", "-tag:v", "hvc1"]   // hvc1 : exigé par QuickTime
+        default:     args += ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p"]
+        }
+        if !audio.isEmpty {
+            args += audioOK ? ["-c:a", "copy"] : ["-c:a", "aac", "-b:a", "192k"]
+        }
+        let tmp = fichier.deletingLastPathComponent()
+            .appendingPathComponent(fichier.deletingPathExtension().lastPathComponent + "_qt.mp4")
+        args += ["-movflags", "+faststart", tmp.path]
+
+        let dureeTotale = await duree(fichier)
+        let libelle = videoOK ? "Conversion du son pour QuickTime…" : "Conversion pour QuickTime…"
+        etape(libelle, 0)
+        let rapporter = progression
+        let r: ResultatProcessus
+        do {
+            r = try await executeur.lancer(ffmpeg, args, surLigneErreur: { ligne in
+                if let f = Moteur.fractionFFmpeg(ligne, dureeTotale: dureeTotale) { rapporter(libelle, f) }
+            })
+        } catch {
+            try? FileManager.default.removeItem(at: tmp)
+            throw error
+        }
+        guard r.code == 0, FileManager.default.fileExists(atPath: tmp.path) else {
+            try? FileManager.default.removeItem(at: tmp)
+            return fichier                              // l'original reste exploitable par ClipFlow
+        }
+        let final = fichier.deletingPathExtension().appendingPathExtension("mp4")
+        try? FileManager.default.removeItem(at: fichier)
+        try? FileManager.default.removeItem(at: final)
+        try FileManager.default.moveItem(at: tmp, to: final)
+        return final
     }
 
     // ─────────────────────────────────────────────────────────────
