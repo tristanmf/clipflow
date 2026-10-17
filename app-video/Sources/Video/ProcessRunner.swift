@@ -53,7 +53,8 @@ final class Executeur: @unchecked Sendable {
         _ chemin: String,
         _ arguments: [String],
         surLigneSortie: (@Sendable (String) -> Void)? = nil,
-        surLigneErreur: (@Sendable (String) -> Void)? = nil
+        surLigneErreur: (@Sendable (String) -> Void)? = nil,
+        dossierCourant: URL? = nil
     ) async throws -> ResultatProcessus {
         if annule { throw ErreurTraitement.annule }
 
@@ -62,6 +63,7 @@ final class Executeur: @unchecked Sendable {
         processus.arguments = arguments
         processus.environment = Binaires.environnement()
         processus.standardInput = FileHandle.nullDevice
+        if let dossierCourant { processus.currentDirectoryURL = dossierCourant }
 
         let tuyauSortie = Pipe()
         let tuyauErreur = Pipe()

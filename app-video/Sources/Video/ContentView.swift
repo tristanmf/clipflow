@@ -114,7 +114,9 @@ struct PanneauPreparation: View {
                 Button("Télécharger") { modele.telecharger() }
                     .disabled(modele.lienEntree.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            Text("La vidéo se charge ici, puis tu choisis l'action. Connexion au site et tunnel réseau : gérés automatiquement.")
+            Text(modele.mode == .sousTitrer
+                 ? "Sur cet onglet, la vidéo est téléchargée puis sous-titrée directement."
+                 : "La vidéo se charge ici, puis tu choisis l'action. Connexion au site et tunnel réseau : gérés automatiquement.")
                 .font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

@@ -102,7 +102,20 @@ Principes :
   `xcode-select --install`) → installe `~/Applications/ClipFlow.app`, signature ad hoc.
   (Icône : déposer `app-video/AppIcon.png` — le build génère l'`.icns`. Nom interne du binaire : `Video`.)
 - **Coller un lien** : un champ « ou colle un lien » télécharge via **yt-dlp** (tous sites) dans
-  `~/Movies/Sous-titrage`, puis charge la vidéo dans la zone → on choisit ensuite l'action.
+  `~/Movies/Sous-titrage/Vidéos téléchargées`. Sur l'onglet **Sous-titrer**, le sous-titrage
+  s'enchaîne aussitôt ; sur Extraire et Compresser, la vidéo est seulement chargée (il reste un
+  passage ou un niveau à choisir).
+  **Noms parlants** : au lieu de `clipflow_5D9FAE04.mp4`, le fichier s'appelle
+  `AAAA-MM-JJ Plateforme @compte — Titre court.mp4`. yt-dlp écrit les infos du post dans un JSON
+  à part (`--print-to-file` + `--no-simulate --progress`, sans effet sur le téléchargement) ;
+  date de publication, `@pseudo` sur les réseaux à pseudo, nom de chaîne ailleurs. Le titre court
+  est rédigé par Claude à partir du texte du post **et de 3 vignettes de la vidéo** (15/50/85 %,
+  640 px) — indispensable quand le post se résume à « waouh ». Pour cet appel seulement, le
+  dossier des vignettes est le dossier de travail de `claude` et seul `Read` est autorisé : rien
+  d'autre n'est lisible. Jamais bloquant (repli sur le titre d'origine), jamais d'écrasement.
+  Le sous-dossier évite qu'un fichier renommé réveille la Folder Action du dossier parent.
+  **Extraits** : `<vidéo> · 03m12 <sujet du passage>_extrait….mp4` — deux extraits de la même
+  vidéo ne s'écrasent plus.
   Tout ce qui dépend du lieu ou du site est **automatique** (rien à cocher) :
   - **Cookies** : premier essai en anonyme ; si le site refuse (X exige une session connectée
     **même sur un tweet public** → « No video could be found »), l'app réessaie seule avec

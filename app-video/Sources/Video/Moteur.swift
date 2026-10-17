@@ -180,11 +180,16 @@ final class Moteur: @unchecked Sendable {
 
     /// Appel générique du CLI claude en mode headless — mêmes garde-fous que
     /// le script : --allowedTools "" et stdin fermé, jeton via l'environnement.
-    func appelerClaude(_ prompt: String) async throws -> String {
+    /// `imagesDans` : dossier d'images à montrer à Claude. Il devient le dossier de
+    /// travail de l'appel et seul l'outil de lecture est autorisé : Claude peut ouvrir
+    /// ces images, et rien hors de ce dossier (toute autre lecture demanderait une
+    /// permission, refusée d'office en mode automatique).
+    func appelerClaude(_ prompt: String, imagesDans: URL? = nil) async throws -> String {
         let claude = try binaire("claude", Binaires.claude)
         let r = try await executeur.lancer(claude, [
-            "-p", prompt, "--model", Moteur.modeleClaude, "--allowedTools", ""
-        ])
+            "-p", prompt, "--model", Moteur.modeleClaude,
+            "--allowedTools", imagesDans == nil ? "" : "Read"
+        ], dossierCourant: imagesDans)
         guard r.code == 0 else {
             // claude écrit parfois l'erreur sur stdout, pas stderr → on prend les deux
             let err = r.erreurs.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -403,10 +408,17 @@ final class Moteur: @unchecked Sendable {
     /// Phase 2 : coupe nette aux timecodes exacts (réencodage volontaire —
     /// -c copy couperait sur les keyframes, donc imprécis), puis sous-titrage
     /// conditionnel du passage.
-    func extraire(video: URL, debut: Double, fin: Double, srtComplet: [BlocSRT], langue: String?, sousTitrer: Bool) async throws -> ResultatTraitement {
+    /// `libelle` = sujet du passage (description du sommaire ou demande en langage
+    /// naturel) : il entre dans le nom du fichier, avec le moment de début.
+    func extraire(video: URL, debut: Double, fin: Double, srtComplet: [BlocSRT], langue: String?, sousTitrer: Bool, libelle: String? = nil) async throws -> ResultatTraitement {
         let ffmpeg = try binaire("ffmpeg", Binaires.ffmpeg)
         let sortieDossier = try Dossiers.preparer(Dossiers.sousTitrage)
+        // « <vidéo> · 03m12 Le passage sur Staline_extrait_FR.mp4 » : on retrouve le passage,
+        // et deux extraits de la même vidéo ne s'écrasent plus.
+        let moment = String(format: "%02dm%02d", Int(debut) / 60, Int(debut) % 60)
+        let sujet = libelle.map { Moteur.nettoyerNom($0, max: 50) } ?? ""
         let nom = video.deletingPathExtension().lastPathComponent
+            + " · " + (sujet.isEmpty ? moment : "\(moment) \(sujet)")
         let dureeExtrait = fin - debut
 
         // Si l'extrait sera ensuite sous-titré, cette coupe n'est qu'un intermédiaire
@@ -569,8 +581,11 @@ final class Moteur: @unchecked Sendable {
         do {
             let fichier = try await telechargerAvecRepliCookies(lien: lien)
             if tunnelParNous { await couperTunnel() }
+            let identifiant = fichier.deletingPathExtension().lastPathComponent
             // Conversion éventuelle APRÈS la coupure du tunnel : elle n'a pas besoin du réseau.
-            return try await rendreCompatibleQuickTime(fichier)
+            let lisible = try await rendreCompatibleQuickTime(fichier)
+            // Puis un nom parlant à la place de « clipflow_XXXX » (jamais bloquant).
+            return await titrer(lisible, identifiant: identifiant)
         } catch {
             // Coupure garantie aussi en cas d'échec OU d'annulation.
             if tunnelParNous { await couperTunnel() }
@@ -597,9 +612,195 @@ final class Moteur: @unchecked Sendable {
             || m.contains("cookies")
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // Nom parlant pour les vidéos téléchargées
+    // « 2026-10-15 X @compte — Titre court.mp4 » au lieu de « clipflow_5D9FAE04.mp4 »
+    // ─────────────────────────────────────────────────────────────
+
+    /// Champs demandés à yt-dlp, écrits en une ligne JSON.
+    static let gabaritMeta = "%(.{extractor_key,uploader,uploader_id,channel,title,fulltitle,description,upload_date,timestamp})j"
+
+    static func fichierMeta(_ identifiant: String) -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(identifiant).meta.json")
+    }
+
+    struct MetaVideo {
+        var plateforme: String?
+        var compte: String?
+        var date: String?          // AAAA-MM-JJ, date de PUBLICATION
+        var titre: String?
+        var description: String?
+    }
+
+    /// Nom lisible de la plateforme à partir de l'extracteur yt-dlp.
+    static func nomPlateforme(_ cle: String) -> String? {
+        let table: [(String, String)] = [
+            ("twitter", "X"), ("youtube", "YouTube"), ("instagram", "Instagram"),
+            ("facebook", "Facebook"), ("tiktok", "TikTok"), ("threads", "Threads"),
+            ("bluesky", "Bluesky"), ("telegram", "Telegram"), ("reddit", "Reddit"),
+            ("vimeo", "Vimeo"), ("dailymotion", "Dailymotion"), ("rumble", "Rumble"),
+            ("twitch", "Twitch"), ("linkedin", "LinkedIn"), ("truthsocial", "Truth Social")
+        ]
+        let c = cle.lowercased()
+        if let t = table.first(where: { c.hasPrefix($0.0) }) { return t.1 }
+        if c.isEmpty || c == "generic" { return nil }
+        return c.prefix(1).uppercased() + c.dropFirst()
+    }
+
+    private func lireMeta(_ identifiant: String) -> MetaVideo? {
+        let url = Moteur.fichierMeta(identifiant)
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let texte = try? String(contentsOf: url, encoding: .utf8),
+              let ligne = texte.split(separator: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }),
+              let data = String(ligne).data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return nil }
+        func s(_ k: String) -> String? {
+            guard let v = obj[k] as? String else { return nil }
+            let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+        var m = MetaVideo()
+        m.plateforme = Moteur.nomPlateforme(s("extractor_key") ?? "")
+        // Réseaux à pseudo (@compte) : on garde le pseudo ; ailleurs, le nom de la chaîne.
+        let pseudo = (s("uploader_id") ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        let reseauxAPseudo: Set<String> = ["X", "Instagram", "TikTok", "Threads", "Bluesky", "Truth Social"]
+        if reseauxAPseudo.contains(m.plateforme ?? ""), !pseudo.isEmpty, !pseudo.allSatisfy(\.isNumber) {
+            m.compte = "@" + pseudo
+        } else {
+            m.compte = s("channel") ?? s("uploader")
+        }
+        if let d = s("upload_date"), d.count == 8, d.allSatisfy(\.isNumber) {
+            m.date = "\(d.prefix(4))-\(d.dropFirst(4).prefix(2))-\(d.suffix(2))"
+        } else if let ts = obj["timestamp"] as? Double {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyy-MM-dd"
+            m.date = f.string(from: Date(timeIntervalSince1970: ts))
+        }
+        m.titre = s("title") ?? s("fulltitle")
+        m.description = s("description")
+        return m
+    }
+
+    /// Rend un texte utilisable comme nom de fichier : pas de / : \ |, pas de retour à
+    /// la ligne ni d'emoji, espaces resserrés, longueur bornée.
+    static func nettoyerNom(_ texte: String, max: Int = 90) -> String {
+        var r = ""
+        for u in texte.unicodeScalars {
+            if u.properties.isEmojiPresentation || (u.properties.isEmoji && u.value >= 0x2000)
+                || u.value == 0xFE0F || u.value == 0x200D { continue }
+            switch u {
+            case "/", ":", "\\", "|": r += " - "
+            case "\"", "<", ">", "?", "*", "«", "»", "“", "”": continue
+            default:
+                if CharacterSet.controlCharacters.contains(u) || CharacterSet.newlines.contains(u) { r += " " }
+                else { r.unicodeScalars.append(u) }
+            }
+        }
+        r = r.split(whereSeparator: { $0 == " " || $0 == "\t" }).joined(separator: " ")
+        r = r.trimmingCharacters(in: CharacterSet(charactersIn: " .-–—"))
+        if r.count > max {
+            r = String(r.prefix(max)).trimmingCharacters(in: CharacterSet(charactersIn: " .-–—")) + "…"
+        }
+        return r
+    }
+
+    /// Trois vignettes de la vidéo (début, milieu, fin), 640 px de large, ~25 Ko chacune.
+    /// Elles donnent le contexte quand le texte du post se résume à « waouh » : bandeau
+    /// d'information, nom à l'écran, logo de média, lieu. Dossier vide si ffmpeg échoue.
+    private func capturesPourTitre(_ fichier: URL) async -> URL? {
+        guard let ffmpeg = Binaires.ffmpeg else { return nil }
+        let dossier = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("clipflow_captures_\(UUID().uuidString.prefix(8))")
+        guard (try? FileManager.default.createDirectory(at: dossier, withIntermediateDirectories: true)) != nil
+        else { return nil }
+        let d = await duree(fichier)
+        let instants: [Double] = d > 0 ? [0.15, 0.5, 0.85].map { $0 * d } : [1]
+        var n = 0
+        for (i, t) in instants.enumerated() {
+            let image = dossier.appendingPathComponent("capture\(i + 1).jpg")
+            let r = try? await executeur.lancer(ffmpeg, [
+                "-v", "error", "-y", "-ss", String(format: "%.2f", t), "-i", fichier.path,
+                "-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "4", image.path])
+            if r?.code == 0, FileManager.default.fileExists(atPath: image.path) { n += 1 }
+        }
+        if n == 0 { try? FileManager.default.removeItem(at: dossier); return nil }
+        return dossier
+    }
+
+    /// Titre court en français, rédigé par Claude à partir du texte du post et de
+    /// vignettes de la vidéo. nil si Claude ne répond pas ou répond à côté : on retombe
+    /// alors sur le titre brut.
+    private func titreCourt(_ m: MetaVideo, captures: URL?) async -> String? {
+        let source = [m.titre, m.description].compactMap { $0 }.joined(separator: "\n\n")
+        let images = captures.flatMap {
+            try? FileManager.default.contentsOfDirectory(atPath: $0.path)
+        }?.filter { $0.hasSuffix(".jpg") }.sorted() ?? []
+        guard !source.isEmpty || !images.isEmpty else { return nil }
+        let partieImages = images.isEmpty ? "" : """
+             Regarde aussi les images extraites de la vidéo (début, milieu, fin), dans le dossier courant : \(images.joined(separator: ", ")). Elles donnent souvent le contexte que le texte n'a pas : personnes, bandeau d'information, texte à l'écran, logo de média, lieu.
+            """
+        let prompt = """
+        Voici le titre et le texte d'accompagnement d'une vidéo publiée sur \(m.plateforme ?? "un site web")\(m.compte.map { " par \($0)" } ?? "").\(partieImages) Propose un titre de fichier en français, court (4 à 8 mots), factuel et précis, qui permette de retrouver la vidéo plus tard : qui dit ou montre quoi. Pas de guillemets, pas d'emoji, pas de point final, ni date ni nom de plateforme. Réponds uniquement par le titre.
+
+        \(source.isEmpty ? "(aucun texte)" : String(source.prefix(2000)))
+        """
+        guard let reponse = try? await appelerClaude(prompt, imagesDans: images.isEmpty ? nil : captures)
+        else { return nil }
+        let ligne = reponse.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first(where: { !$0.isEmpty }) ?? ""
+        let titre = Moteur.nettoyerNom(ligne, max: 80)
+        return (titre.count >= 3 && titre.count <= 81) ? titre : nil
+    }
+
+    /// « date plateforme compte — titre », chaque morceau étant facultatif.
+    static func nomParlant(_ m: MetaVideo, titre: String?) -> String? {
+        var tete: [String] = []
+        if let d = m.date { tete.append(d) }
+        if let p = m.plateforme { tete.append(p) }
+        if let c = m.compte { tete.append(Moteur.nettoyerNom(c, max: 30)) }
+        let entete = tete.joined(separator: " ")
+        let t = (titre ?? m.titre.map { Moteur.nettoyerNom($0, max: 60) }) ?? ""
+        switch (entete.isEmpty, t.isEmpty) {
+        case (true, true):  return nil
+        case (false, true): return entete
+        case (true, false): return t
+        default:            return "\(entete) — \(t)"
+        }
+    }
+
+    /// Renomme sans jamais écraser un fichier existant (ajoute « (2) », « (3) »…).
+    /// En cas d'échec, garde l'ancien nom plutôt que d'interrompre quoi que ce soit.
+    private func renommer(_ fichier: URL, en base: String) -> URL {
+        let dossier = fichier.deletingLastPathComponent()
+        let ext = fichier.pathExtension
+        var cible = dossier.appendingPathComponent(base).appendingPathExtension(ext)
+        var n = 2
+        while FileManager.default.fileExists(atPath: cible.path) {
+            cible = dossier.appendingPathComponent("\(base) (\(n))").appendingPathExtension(ext)
+            n += 1
+        }
+        do { try FileManager.default.moveItem(at: fichier, to: cible); return cible }
+        catch { return fichier }
+    }
+
+    private func titrer(_ fichier: URL, identifiant: String) async -> URL {
+        guard let meta = lireMeta(identifiant) else { return fichier }
+        etape("Choix d'un titre (regard sur la vidéo)…", nil)
+        let captures = await capturesPourTitre(fichier)
+        defer { if let captures { try? FileManager.default.removeItem(at: captures) } }
+        let court = await titreCourt(meta, captures: captures)
+        guard let base = Moteur.nomParlant(meta, titre: court) else { return fichier }
+        return renommer(fichier, en: base)
+    }
+
     private func telechargerBrut(lien: String, cookiesNavigateur: String?) async throws -> URL {
         let ytdlp = try binaire("yt-dlp", Binaires.ytdlp)
-        let dossier = try Dossiers.preparer(Dossiers.sousTitrage)
+        // Sous-dossier dédié : un fichier ajouté dans un SOUS-dossier ne réveille pas une
+        // Folder Action posée sur ~/Movies/Sous-titrage (dépôt public), quel que soit son nom.
+        let dossier = try Dossiers.preparer(Dossiers.telechargements)
         let identifiant = "clipflow_\(UUID().uuidString.prefix(8))"
         let gabarit = "\(dossier)/\(identifiant).%(ext)s"
 
@@ -625,6 +826,11 @@ final class Moteur: @unchecked Sendable {
             "--retries", "5",                // relances du téléchargement
             "--extractor-retries", "3",      // relances de la récupération des métadonnées (JSON)
             "--retry-sleep", "3",            // petite pause entre les tentatives
+            // Informations du post (compte, date, titre, texte) dans un petit JSON à part,
+            // pour donner ensuite un nom parlant au fichier. --no-simulate et --progress
+            // garantissent que cette option ne coupe ni le téléchargement ni la progression.
+            "--print-to-file", Moteur.gabaritMeta, Moteur.fichierMeta(identifiant).path,
+            "--no-simulate", "--progress",
             "-o", gabarit,
             lien
         ]

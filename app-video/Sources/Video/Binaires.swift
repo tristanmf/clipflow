@@ -85,6 +85,9 @@ enum Binaires {
 enum Dossiers {
     static let sousTitrage = NSString(string: "~/Movies/Sous-titrage").expandingTildeInPath
     static let compression = NSString(string: "~/Movies/Compression").expandingTildeInPath
+    /// Vidéos récupérées depuis un lien. Sous-dossier de Sous-titrage : à portée du
+    /// bouton dossier, mais séparé des résultats (et hors de portée d'une Folder Action).
+    static let telechargements = NSString(string: "~/Movies/Sous-titrage/Vidéos téléchargées").expandingTildeInPath
 
     static func preparer(_ chemin: String) throws -> String {
         try FileManager.default.createDirectory(atPath: chemin, withIntermediateDirectories: true)

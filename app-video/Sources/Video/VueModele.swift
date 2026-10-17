@@ -122,7 +122,11 @@ final class VueModele: ObservableObject {
         demandeNaturelle = ""
         debutExtrait = nil
         finExtrait = nil
+        libellePassage = nil
     }
+
+    /// Sujet du passage choisi (pour nommer le fichier de l'extrait).
+    private var libellePassage: String?
 
     func annuler() {
         generation += 1                 // le job courant devient périmé
@@ -205,6 +209,7 @@ final class VueModele: ObservableObject {
             do { issue = .success(try await m.telecharger(lien: lien)) }
             catch { issue = .failure(error) }
             guard self.generation == gen else { return }
+            var enchainer = false
             switch issue {
             case .success(let fichier):
                 self.effacerAnalyse()
@@ -212,6 +217,10 @@ final class VueModele: ObservableObject {
                 self.srtFourni = nil
                 self.lienEntree = ""
                 self.phase = .pret
+                // Sur l'onglet Sous-titrer, coller un lien = vouloir la vidéo sous-titrée :
+                // on enchaîne directement. Sur Extraire et Compresser, il reste un choix à
+                // faire (passage, niveau) : la vidéo est seulement chargée.
+                enchainer = (self.mode == .sousTitrer)
             case .failure(let e):
                 if e is CancellationError { self.phase = .pret }
                 else if let et = e as? ErreurTraitement, case .annule = et { self.phase = .pret }
@@ -219,6 +228,7 @@ final class VueModele: ObservableObject {
             }
             self.etapeLibelle = ""
             self.fraction = nil
+            if enchainer { self.lancer() }
         }
     }
 
@@ -266,6 +276,7 @@ final class VueModele: ObservableObject {
               let fin = choisis.map(\.fin).max() else { return }
         debutExtrait = debut
         finExtrait = fin
+        libellePassage = choisis.min(by: { $0.debut < $1.debut })?.description
         phase = .confirmerExtrait
     }
 
@@ -292,6 +303,7 @@ final class VueModele: ObservableObject {
             case .success(let (debut, fin)):
                 self.debutExtrait = debut
                 self.finExtrait = fin
+                self.libellePassage = demande
                 self.phase = .confirmerExtrait
             case .failure(let e):
                 if e is CancellationError { self.phase = .choixExtrait }
@@ -309,14 +321,17 @@ final class VueModele: ObservableObject {
         let srt = srtComplet
         let langue = langueDetectee
         let sousTitrer = sousTitrerExtrait
+        let libelle = libellePassage
         demarrer { .termine(try await $0.extraire(video: video, debut: debut, fin: fin,
-                                                  srtComplet: srt, langue: langue, sousTitrer: sousTitrer)) }
+                                                  srtComplet: srt, langue: langue, sousTitrer: sousTitrer,
+                                                  libelle: libelle)) }
     }
 
     /// Revenir de l'aperçu au choix du passage (sans couper).
     func retourChoixExtrait() {
         debutExtrait = nil
         finExtrait = nil
+        libellePassage = nil
         phase = .choixExtrait
     }
 
@@ -330,6 +345,7 @@ final class VueModele: ObservableObject {
         guard peutExtraireAutrePassage else { reinitialiser(); return }
         debutExtrait = nil
         finExtrait = nil
+        libellePassage = nil
         selection = []
         demandeNaturelle = ""
         phase = .choixExtrait
