@@ -410,7 +410,46 @@ final class Moteur: @unchecked Sendable {
     /// conditionnel du passage.
     /// `libelle` = sujet du passage (description du sommaire ou demande en langage
     /// naturel) : il entre dans le nom du fichier, avec le moment de début.
+    // ─────────────────────────────────────────────────────────────
+    // Livraison dans le dossier Téléchargements
+    // ─────────────────────────────────────────────────────────────
+
+    /// Déplace un fichier FINI vers ~/Downloads, sans jamais écraser (« (2) »…).
+    /// nil si le déplacement est refusé (Bitdefender Safe Files, droits) : le fichier
+    /// reste alors intact là où il a été fabriqué.
+    func deplacerVersTelechargements(_ fichier: URL) -> URL? {
+        let dossier = URL(fileURLWithPath: Dossiers.telechargementsMac)
+        let base = fichier.deletingPathExtension().lastPathComponent
+        let ext = fichier.pathExtension
+        var cible = dossier.appendingPathComponent(fichier.lastPathComponent)
+        var n = 2
+        while FileManager.default.fileExists(atPath: cible.path) {
+            cible = dossier.appendingPathComponent("\(base) (\(n))").appendingPathExtension(ext)
+            n += 1
+        }
+        do {
+            try FileManager.default.moveItem(at: fichier, to: cible)
+            return cible
+        } catch {
+            return nil
+        }
+    }
+
+    /// Extraction complète, puis livraison de la vidéo dans Téléchargements. Le .srt
+    /// éventuel reste dans ~/Movies/Sous-titrage : c'est le fichier de travail qu'on
+    /// corrige, il n'a rien à faire au milieu des téléchargements.
     func extraire(video: URL, debut: Double, fin: Double, srtComplet: [BlocSRT], langue: String?, sousTitrer: Bool, libelle: String? = nil) async throws -> ResultatTraitement {
+        let r = try await extraireSurPlace(video: video, debut: debut, fin: fin, srtComplet: srtComplet,
+                                           langue: langue, sousTitrer: sousTitrer, libelle: libelle)
+        guard let livre = deplacerVersTelechargements(r.url) else {
+            return ResultatTraitement(url: r.url, sousTitresURL: r.sousTitresURL,
+                                      message: r.message + "\nImpossible de le ranger dans Téléchargements : il est resté dans Vidéos › Sous-titrage.")
+        }
+        return ResultatTraitement(url: livre, sousTitresURL: r.sousTitresURL,
+                                  message: r.message + "\nRangé dans Téléchargements.")
+    }
+
+    private func extraireSurPlace(video: URL, debut: Double, fin: Double, srtComplet: [BlocSRT], langue: String?, sousTitrer: Bool, libelle: String?) async throws -> ResultatTraitement {
         let ffmpeg = try binaire("ffmpeg", Binaires.ffmpeg)
         let sortieDossier = try Dossiers.preparer(Dossiers.sousTitrage)
         // « <vidéo> · 03m12 Le passage sur Staline_extrait_FR.mp4 » : on retrouve le passage,
@@ -585,7 +624,9 @@ final class Moteur: @unchecked Sendable {
             // Conversion éventuelle APRÈS la coupure du tunnel : elle n'a pas besoin du réseau.
             let lisible = try await rendreCompatibleQuickTime(fichier)
             // Puis un nom parlant à la place de « clipflow_XXXX » (jamais bloquant).
-            return await titrer(lisible, identifiant: identifiant)
+            let titre = await titrer(lisible, identifiant: identifiant, lien: lien)
+            // Puis rangé dans Téléchargements (s'il est refusé, il reste dans « Vidéos téléchargées »).
+            return deplacerVersTelechargements(titre) ?? titre
         } catch {
             // Coupure garantie aussi en cas d'échec OU d'annulation.
             if tunnelParNous { await couperTunnel() }
@@ -746,8 +787,13 @@ final class Moteur: @unchecked Sendable {
 
         \(source.isEmpty ? "(aucun texte)" : String(source.prefix(2000)))
         """
-        guard let reponse = try? await appelerClaude(prompt, imagesDans: images.isEmpty ? nil : captures)
-        else { return nil }
+        let reponse: String
+        do {
+            reponse = try await appelerClaude(prompt, imagesDans: images.isEmpty ? nil : captures)
+        } catch {
+            Moteur.journal("titrage : appel à Claude échoué — \(String(error.localizedDescription.prefix(300)))")
+            return nil
+        }
         let ligne = reponse.split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first(where: { !$0.isEmpty }) ?? ""
@@ -782,17 +828,83 @@ final class Moteur: @unchecked Sendable {
             cible = dossier.appendingPathComponent("\(base) (\(n))").appendingPathExtension(ext)
             n += 1
         }
-        do { try FileManager.default.moveItem(at: fichier, to: cible); return cible }
-        catch { return fichier }
+        do {
+            try FileManager.default.moveItem(at: fichier, to: cible)
+            Moteur.journal("renommage OK → \(cible.lastPathComponent)")
+            return cible
+        } catch {
+            Moteur.journal("renommage ÉCHOUÉ vers « \(cible.lastPathComponent) » : \(error.localizedDescription)")
+            return fichier
+        }
     }
 
-    private func titrer(_ fichier: URL, identifiant: String) async -> URL {
-        guard let meta = lireMeta(identifiant) else { return fichier }
+    /// Ce que le lien dit à lui seul : le réseau, et le compte quand il figure dans
+    /// l'adresse (x.com/<compte>/status/…, tiktok.com/@compte/…, threads.net/@compte/…).
+    /// Sert de base quand yt-dlp n'a pas fourni ses informations, et de complément sinon.
+    static func metaDepuisLien(_ lien: String) -> MetaVideo {
+        var m = MetaVideo()
+        guard let u = URL(string: lien), var hote = u.host?.lowercased() else { return m }
+        if hote.hasPrefix("www.") { hote.removeFirst(4) }
+        if hote.hasPrefix("m.") { hote.removeFirst(2) }
+        let table: [(String, String)] = [
+            ("x.com", "X"), ("twitter.com", "X"), ("youtube.com", "YouTube"), ("youtu.be", "YouTube"),
+            ("instagram.com", "Instagram"), ("facebook.com", "Facebook"), ("fb.watch", "Facebook"),
+            ("tiktok.com", "TikTok"), ("threads.net", "Threads"), ("threads.com", "Threads"),
+            ("bsky.app", "Bluesky"), ("t.me", "Telegram"), ("reddit.com", "Reddit"),
+            ("vimeo.com", "Vimeo"), ("dailymotion.com", "Dailymotion"), ("rumble.com", "Rumble"),
+            ("truthsocial.com", "Truth Social"), ("linkedin.com", "LinkedIn")
+        ]
+        m.plateforme = table.first(where: { hote == $0.0 || hote.hasSuffix("." + $0.0) })?.1
+        let morceaux = u.pathComponents.filter { $0 != "/" }
+        if let premier = morceaux.first {
+            if m.plateforme == "X", !["i", "home", "search", "hashtag"].contains(premier.lowercased()) {
+                m.compte = "@" + premier
+            } else if ["TikTok", "Threads"].contains(m.plateforme ?? ""), premier.hasPrefix("@") {
+                m.compte = premier
+            }
+        }
+        return m
+    }
+
+    /// Journal des titrages : ~/Library/Logs/ClipFlow.log (une ligne horodatée par étape).
+    /// Il dit, quand un fichier garde son nom provisoire, laquelle des étapes a cédé.
+    static func journal(_ ligne: String) {
+        let url = URL(fileURLWithPath: NSString(string: "~/Library/Logs/ClipFlow.log").expandingTildeInPath)
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "fr_FR")
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        guard let donnees = "\(f.string(from: Date()))  \(ligne)\n".data(using: .utf8) else { return }
+        if let fh = try? FileHandle(forWritingTo: url) {
+            defer { try? fh.close() }
+            _ = try? fh.seekToEnd()
+            try? fh.write(contentsOf: donnees)
+        } else {
+            try? donnees.write(to: url)
+        }
+    }
+
+    private func titrer(_ fichier: URL, identifiant: String, lien: String) async -> URL {
+        let duLien = Moteur.metaDepuisLien(lien)
+        var meta: MetaVideo
+        if let lue = lireMeta(identifiant) {
+            meta = lue
+            meta.plateforme = meta.plateforme ?? duLien.plateforme
+            meta.compte = meta.compte ?? duLien.compte
+            Moteur.journal("titrage : infos du post trouvées (\(meta.plateforme ?? "?") \(meta.compte ?? "?"), date \(meta.date ?? "?"))")
+        } else {
+            meta = duLien
+            Moteur.journal("titrage : infos du post ABSENTES (attendues dans \(Moteur.fichierMeta(identifiant).path)) — repli sur le lien : \(meta.plateforme ?? "?") \(meta.compte ?? "?")")
+        }
         etape("Choix d'un titre (regard sur la vidéo)…", nil)
         let captures = await capturesPourTitre(fichier)
         defer { if let captures { try? FileManager.default.removeItem(at: captures) } }
+        Moteur.journal("titrage : \(captures == nil ? "aucune vignette" : "vignettes extraites")")
         let court = await titreCourt(meta, captures: captures)
-        guard let base = Moteur.nomParlant(meta, titre: court) else { return fichier }
+        Moteur.journal("titrage : titre proposé par Claude = \(court ?? "AUCUN")")
+        guard let base = Moteur.nomParlant(meta, titre: court) else {
+            Moteur.journal("titrage : rien pour composer un nom — nom provisoire conservé")
+            return fichier
+        }
         return renommer(fichier, en: base)
     }
 

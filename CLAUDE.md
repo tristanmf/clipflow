@@ -113,9 +113,17 @@ Principes :
   640 px) — indispensable quand le post se résume à « waouh ». Pour cet appel seulement, le
   dossier des vignettes est le dossier de travail de `claude` et seul `Read` est autorisé : rien
   d'autre n'est lisible. Jamais bloquant (repli sur le titre d'origine), jamais d'écrasement.
+  Si yt-dlp n'a pas fourni ses infos, repli sur le lien lui-même (réseau d'après l'hôte, compte
+  d'après l'adresse sur X/TikTok/Threads) + vignettes. Chaque étape du titrage est notée dans
+  `~/Library/Logs/ClipFlow.log` (diagnostic : `tail -20 ~/Library/Logs/ClipFlow.log` ; s'il
+  n'existe pas, le code qui tourne est ancien — vérifier `git branch --show-current`).
   Le sous-dossier évite qu'un fichier renommé réveille la Folder Action du dossier parent.
   **Extraits** : `<vidéo> · 03m12 <sujet du passage>_extrait….mp4` — deux extraits de la même
   vidéo ne s'écrasent plus.
+  **Livraison** : une fois finis, extraits et vidéos téléchargées sont déplacés dans
+  **`~/Downloads`** (fabriqués dans `~/Movies`, puis déplacés en un seul geste, jamais
+  d'écrasement ; en cas d'échec ils restent dans `~/Movies` et l'écran de fin le dit). Le `.srt`
+  d'un extrait reste dans `~/Movies/Sous-titrage`.
   Tout ce qui dépend du lieu ou du site est **automatique** (rien à cocher) :
   - **Cookies** : premier essai en anonyme ; si le site refuse (X exige une session connectée
     **même sur un tweet public** → « No video could be found »), l'app réessaie seule avec

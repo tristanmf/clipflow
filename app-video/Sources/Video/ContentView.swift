@@ -446,7 +446,9 @@ struct PanneauResultat: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             if let srt = resultat.sousTitresURL {
-                Text("Sous-titres éditables : \(srt.lastPathComponent) (même dossier)")
+                Text("Sous-titres éditables : \(srt.lastPathComponent)"
+                     + (srt.deletingLastPathComponent() == resultat.url.deletingLastPathComponent()
+                        ? " (même dossier)" : " (dans Vidéos › Sous-titrage)"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {

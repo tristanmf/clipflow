@@ -88,6 +88,11 @@ enum Dossiers {
     /// Vidéos récupérées depuis un lien. Sous-dossier de Sous-titrage : à portée du
     /// bouton dossier, mais séparé des résultats (et hors de portée d'une Folder Action).
     static let telechargements = NSString(string: "~/Movies/Sous-titrage/Vidéos téléchargées").expandingTildeInPath
+    /// Le dossier Téléchargements du Mac : destination FINALE des extraits et des vidéos
+    /// téléchargées (demande de Tristan, 17/10/2026). Tout est fabriqué dans ~/Movies,
+    /// puis le fichier fini est déplacé ici en un seul geste ; en cas de refus, il reste
+    /// là où il a été fabriqué.
+    static let telechargementsMac = NSString(string: "~/Downloads").expandingTildeInPath
 
     static func preparer(_ chemin: String) throws -> String {
         try FileManager.default.createDirectory(atPath: chemin, withIntermediateDirectories: true)
