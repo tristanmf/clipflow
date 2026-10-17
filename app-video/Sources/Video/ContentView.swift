@@ -172,15 +172,15 @@ struct PanneauPreparation: View {
 
 struct ZoneDepot: View {
     @ObservedObject var modele: VueModele
-    @State private var survole = false
-    @State private var montrePanneau = false
+    @StateObject private var survole = Etat(false)
+    @StateObject private var montrePanneau = Etat(false)
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14)
-                .fill(survole ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor))
+                .fill(survole.valeur ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor))
             RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(survole ? Color.accentColor : Color.secondary.opacity(0.35),
+                .strokeBorder(survole.valeur ? Color.accentColor : Color.secondary.opacity(0.35),
                               style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
             VStack(spacing: 10) {
                 Image(systemName: modele.video == nil ? "film" : "checkmark.circle")
@@ -204,11 +204,11 @@ struct ZoneDepot: View {
         }
         .frame(maxWidth: .infinity, minHeight: 170)
         .contentShape(RoundedRectangle(cornerRadius: 14))
-        .onTapGesture { montrePanneau = true }
-        .onDrop(of: [.fileURL], isTargeted: $survole) { fournisseurs in
+        .onTapGesture { montrePanneau.valeur = true }
+        .onDrop(of: [.fileURL], isTargeted: $survole.valeur) { fournisseurs in
             deposer(fournisseurs)
         }
-        .fileImporter(isPresented: $montrePanneau,
+        .fileImporter(isPresented: $montrePanneau.valeur,
                       allowedContentTypes: typesAcceptes,
                       allowsMultipleSelection: false) { resultat in
             if case .success(let urls) = resultat, let url = urls.first {
@@ -253,11 +253,11 @@ struct BoutonChoisirFichier: View {
     let titre: String
     let types: [UTType]
     let action: (URL) -> Void
-    @State private var montre = false
+    @StateObject private var montre = Etat(false)
 
     var body: some View {
-        Button(titre) { montre = true }
-            .fileImporter(isPresented: $montre, allowedContentTypes: types, allowsMultipleSelection: false) { resultat in
+        Button(titre) { montre.valeur = true }
+            .fileImporter(isPresented: $montre.valeur, allowedContentTypes: types, allowsMultipleSelection: false) { resultat in
                 if case .success(let urls) = resultat, let url = urls.first { action(url) }
             }
     }
@@ -422,13 +422,13 @@ struct PanneauConfirmerExtrait: View {
 struct PanneauResultat: View {
     @ObservedObject var modele: VueModele
     let resultat: ResultatTraitement
-    @State private var miniature: NSImage?
+    @StateObject private var miniature = Etat<NSImage?>(nil)
 
     var body: some View {
         VStack(spacing: 14) {
             Spacer()
-            if let miniature {
-                Image(nsImage: miniature)
+            if let image = miniature.valeur {
+                Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: 320, maxHeight: 200)
@@ -466,7 +466,7 @@ struct PanneauResultat: View {
             Spacer()
         }
         .padding(.horizontal)
-        .task { miniature = await Miniature.generer(pour: resultat.url) }
+        .task { miniature.valeur = await Miniature.generer(pour: resultat.url) }
     }
 }
 
@@ -495,4 +495,12 @@ struct PanneauErreur: View {
         }
         .padding(.horizontal)
     }
+}
+
+/// Remplace `@State` : sur le SDK macOS 27, `@State` est une macro dont le plugin
+/// (SwiftUIMacros) n'est livré qu'avec Xcode — les Command Line Tools ne savent pas
+/// la compiler. `@StateObject` + cette petite boîte donne le même comportement.
+final class Etat<Valeur>: ObservableObject {
+    @Published var valeur: Valeur
+    init(_ valeur: Valeur) { self.valeur = valeur }
 }

@@ -101,6 +101,12 @@ Principes :
 - Build : `bash app-video/construire-app.sh` (Swift Package, pas de projet Xcode ; prérequis
   `xcode-select --install`) → installe `~/Applications/ClipFlow.app`, signature ad hoc.
   (Icône : déposer `app-video/AppIcon.png` — le build génère l'`.icns`. Nom interne du binaire : `Video`.)
+- **Pas de macros SwiftUI** (`@State`, `@Observable`, `#Preview`, `@Entry`, `@Previewable`) :
+  sur le SDK macOS 27, `@State` est une macro dont le plugin `SwiftUIMacros` n'est livré
+  qu'avec Xcode → build impossible avec les seules Command Line Tools (« external macro
+  implementation type 'SwiftUIMacros.StateMacro' could not be found »). Remplacement :
+  `@StateObject private var x = Etat(false)` puis `x.valeur` / `$x.valeur` (classe `Etat` en bas
+  de `ContentView.swift`). `@StateObject`, `@ObservedObject` et `@Published` passent.
 - **Coller un lien** : un champ « ou colle un lien » télécharge via **yt-dlp** (tous sites) dans
   `~/Movies/Sous-titrage/Vidéos téléchargées`. Sur l'onglet **Sous-titrer**, le sous-titrage
   s'enchaîne aussitôt ; sur Extraire et Compresser, la vidéo est seulement chargée (il reste un
